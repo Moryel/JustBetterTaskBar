@@ -1,0 +1,13 @@
+# Derleme çıktıları
+*.exe
+*.obj
+*.res
+*.pdb
+*.ilk
+*.manifest
+
+# Kişisel ayarlar (her kullanıcının bilgisayarında ilk açılışta oluşturulur)
+dock.ini
+
+# Üretilen önizleme
+icon_preview.png
