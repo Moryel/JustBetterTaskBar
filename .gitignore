@@ -1,4 +1,4 @@
-# Derleme çıktıları
+# Build output
 *.exe
 *.obj
 *.res
@@ -6,8 +6,8 @@
 *.ilk
 *.manifest
 
-# Kişisel ayarlar (her kullanıcının bilgisayarında ilk açılışta oluşturulur)
+# Personal settings (created on first run on each machine)
 dock.ini
 
-# Üretilen önizleme
+# Generated preview
 icon_preview.png

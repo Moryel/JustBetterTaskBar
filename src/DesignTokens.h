@@ -1,15 +1,15 @@
-// DesignTokens.h — arayüz tasarım değerleri
+// DesignTokens.h — UI design values
 //
-// Ayarlar penceresinin görünüşü yalnızca buradan gelir: renkler, köşe yarıçapları, boşluklar,
-// yazı tipleri ve kontrol ölçüleri. Arayüz kodunda renk ya da ölçü sabit yazılmaz.
-// Tasarımı değiştirmek için bu dosyadaki değerleri düzenlemek yeterlidir. Dosyanın GDI+ dışında
-// bağımlılığı yoktur, başka projelerde de kullanılabilir.
+// Every visual property of the settings window comes from here: colors, corner radii, spacing,
+// fonts and control sizes. The UI code never hard-codes a color or a size.
+// To restyle the UI, edit the values in this file. It has no dependencies other than GDI+
+// and can be reused in other projects.
 //
-// Varsayılan tema sade ve nötrdür: tek vurgu rengi, yumuşak gri yüzeyler.
+// The default theme is plain and neutral: a single accent color and soft gray surfaces.
 #pragma once
 #include <windows.h>
 #include <algorithm>
-using std::min;  // GDI+ başlıkları min/max ister (NOMINMAX ile derlenen projelerde)
+using std::min;  // GDI+ headers need min/max (for projects built with NOMINMAX)
 using std::max;
 #include <objidl.h>
 #include <gdiplus.h>
@@ -17,25 +17,25 @@ using std::max;
 namespace design {
 
 struct Palette {
-    Gdiplus::Color background;    // pencere zemini
-    Gdiplus::Color sidebar;       // sol kategori listesi zemini
-    Gdiplus::Color surface;       // ayar gruplarının kart zemini
-    Gdiplus::Color surfaceHover;  // üzerine gelinen satır / düğme
-    Gdiplus::Color border;        // ince çizgiler, kart kenarı
-    Gdiplus::Color divider;       // kart içindeki satır ayırıcıları
-    Gdiplus::Color text;          // ana yazı
-    Gdiplus::Color textMuted;     // açıklama yazısı
-    Gdiplus::Color textDisabled;  // pasif öğe
-    Gdiplus::Color accent;        // vurgu (açık anahtar, seçili düğme, kaydırıcı dolgusu)
+    Gdiplus::Color background;    // window background
+    Gdiplus::Color sidebar;       // category list background
+    Gdiplus::Color surface;       // settings group cards
+    Gdiplus::Color surfaceHover;  // hovered row / button
+    Gdiplus::Color border;        // thin lines, card outlines
+    Gdiplus::Color divider;       // row separators inside cards
+    Gdiplus::Color text;          // primary text
+    Gdiplus::Color textMuted;     // descriptions
+    Gdiplus::Color textDisabled;  // disabled items
+    Gdiplus::Color accent;        // toggles that are on, selected options, slider fill
     Gdiplus::Color accentHover;
-    Gdiplus::Color onAccent;      // vurgu rengi üzerindeki yazı
-    Gdiplus::Color track;         // kapalı anahtar / kaydırıcı rayı
-    Gdiplus::Color knob;          // anahtar ve kaydırıcı topuzu
-    Gdiplus::Color selection;     // seçili kategori arka planı
-    Gdiplus::Color danger;        // tehlikeli eylem (ör. Dock'tan çık)
+    Gdiplus::Color onAccent;      // text on the accent color
+    Gdiplus::Color track;         // toggles that are off, slider track
+    Gdiplus::Color knob;          // toggle and slider knobs
+    Gdiplus::Color selection;     // selected category
+    Gdiplus::Color danger;        // destructive actions (e.g. Quit)
 };
 
-struct Metrics {  // 96 DPI'daki değerler (piksel); kod DPI'ya göre ölçekler
+struct Metrics {  // values at 96 DPI in pixels; the code scales them for the current DPI
     float windowWidth = 760, windowHeight = 580;
     float sidebarWidth = 200;
     float spaceXS = 4, spaceS = 8, spaceM = 12, spaceL = 16, spaceXL = 24, spaceXXL = 32;
@@ -49,12 +49,12 @@ struct Metrics {  // 96 DPI'daki değerler (piksel); kod DPI'ya göre ölçekler
 };
 
 struct Typography {
-    const wchar_t* family = L"Segoe UI";  // ileride kendi yazı tipin
-    float title = 22;      // sayfa başlığı
-    float heading = 13;    // grup başlığı
-    float body = 14;       // ayar adı
-    float caption = 12;    // açıklama
-    float sidebar = 14;    // kategori adları
+    const wchar_t* family = L"Segoe UI";
+    float title = 22;      // page title
+    float heading = 13;    // group heading
+    float body = 14;       // setting name
+    float caption = 12;    // description
+    float sidebar = 14;    // category names
     bool titleBold = true, headingBold = true;
 };
 

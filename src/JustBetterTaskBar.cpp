@@ -1,10 +1,10 @@
-// Just Better TaskBar — macOS tarzı, hafif bir Windows dock'u ve menü çubuğu (Win32 + GDI+, tek .exe)
+// Just Better TaskBar — a lightweight macOS-style dock and menu bar for Windows (Win32 + GDI+, single .exe)
 //
-// Özellikler: büyütme efekti, sabitlenmiş + çalışan uygulamalar, çalışma noktası,
-// açılış zıplaması, ipucu balonu, sağ tık menüsü, sürükle-bırak ile sabitleme,
-// sürükleyerek sıralama / dışarı sürükleyip kaldırma, alt / sol / sağ konum,
-// otomatik gizleme, klasör yığınları, boşluklar, kilit, Geri Dönüşüm Kutusu,
-// Başlat (Launchpad) düğmesi, Windows görev çubuğunu gizleme.
+// Features: magnification, pinned + running apps, running indicators,
+// launch bounce, tooltips, context menus, drag-and-drop pinning,
+// drag to reorder / drag out to remove, bottom / left / right position,
+// auto-hide, folder stacks, spacers, lock, Recycle Bin,
+// Start (Launchpad) button, hiding the Windows taskbar.
 
 #ifndef UNICODE
 #define UNICODE
@@ -68,7 +68,7 @@ static const GUID kAppsFolder = {0x1e87508d, 0x89c2, 0x42f0, {0x8a, 0x7e, 0x64, 
 static const GUID kDownloads = {0x374de290, 0x123f, 0x4565, {0x91, 0x64, 0x39, 0xc4, 0x92, 0x5e, 0x46, 0x7b}};
 static const PROPERTYKEY kPKeyAumid = {{0x9F4C2855, 0x9F79, 0x4B39, {0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3}}, 5};
 
-// ---------------------------------------------------------------- veri yapıları
+// ---------------------------------------------------------------- data
 struct Settings {
     int size = 50;
     int magnify = 85;
@@ -168,20 +168,20 @@ enum {
     ID_REMOVE, ID_STACKOPEN, ID_FOLDEROPEN,
     ID_GLASS = 70, ID_THEME0 = 71, ID_OPAC0 = 74, ID_TIPS = 80, ID_ATTN, ID_CLICKMIN, ID_FULLHIDE,
     ID_SHOWLAUNCH, ID_SHOWRUN, ID_SHOWTRASH, ID_DOWNLOADS, ID_BAR = 95, ID_BARDATE, ID_BARSEC, ID_BARTRAY, ID_OPENSETTINGS,
-    ID_OPEN = 100, ID_PIN, ID_CLOSEALL, ID_INDSTYLE0 = 120, ID_MINSTYLE0 = 125, ID_MINPREV = 128, ID_SEPAPPS = 129, ID_WIN0 = 200, ID_FILE0 = 300
+    ID_OPEN = 100, ID_PIN, ID_CLOSEALL, ID_INDSTYLE0 = 120, ID_MINSTYLE0 = 125, ID_MINPREV = 128, ID_SEPAPPS = 129, ID_HIDEAPP = 130, ID_WIN0 = 200, ID_FILE0 = 300
 };
 static const int kSizes[4] = {40, 50, 64, 80};
-static const wchar_t* kSizeNames[4] = {L"Küçük", L"Orta", L"Büyük", L"Çok büyük"};
+static const wchar_t* kSizeNames[4] = {L"Small", L"Medium", L"Large", L"Extra large"};
 static const int kMags[6] = {0, 30, 60, 85, 110, 140};
-static const wchar_t* kMagNames[6] = {L"Kapalı", L"Çok az", L"Az", L"Orta", L"Çok", L"En çok"};
-static const wchar_t* kPosNames[3] = {L"Altta", L"Solda", L"Sağda"};
+static const wchar_t* kMagNames[6] = {L"Off", L"Very low", L"Low", L"Medium", L"High", L"Maximum"};
+static const wchar_t* kPosNames[3] = {L"Bottom", L"Left", L"Right"};
 static const int kDelays[4] = {0, 200, 500, 1000};
-static const wchar_t* kDelayNames[4] = {L"Bekleme yok", L"Kısa (0,2 sn)", L"Orta (0,5 sn)", L"Uzun (1 sn)"};
+static const wchar_t* kDelayNames[4] = {L"No delay", L"Short (0.2 s)", L"Medium (0.5 s)", L"Long (1 s)"};
 static const int kAnims[4] = {0, 150, 300, 600};
-static const wchar_t* kAnimNames[4] = {L"Animasyonsuz", L"Hızlı", L"Normal", L"Yavaş"};
-static const wchar_t* kThemeNames[3] = {L"Koyu", L"Açık", L"Sistem temasına uy"};
+static const wchar_t* kAnimNames[4] = {L"No animation", L"Fast", L"Normal", L"Slow"};
+static const wchar_t* kThemeNames[3] = {L"Dark", L"Light", L"Match system theme"};
 static const int kOpacs[4] = {25, 45, 65, 85};
-static const wchar_t* kOpacNames[4] = {L"Çok saydam", L"Saydam", L"Az saydam", L"Neredeyse opak"};
+static const wchar_t* kOpacNames[4] = {L"Very transparent", L"Transparent", L"Slightly transparent", L"Almost opaque"};
 static const float kPeriod = 0.6f;
 const UINT WM_APPBAR = WM_APP + 1;
 
@@ -228,6 +228,10 @@ std::vector<Pin> g_pins;
 std::vector<Item> g_items;
 std::vector<std::wstring> g_runOrder;
 std::vector<std::wstring> g_appOrder;
+std::vector<std::wstring> g_hiddenApps;
+static bool IsHiddenApp(const std::wstring& key) {
+    return std::find(g_hiddenApps.begin(), g_hiddenApps.end(), key) != g_hiddenApps.end();
+}
 std::map<std::wstring, Bitmap*> g_icons;
 std::map<std::wstring, std::wstring> g_names;
 std::map<HWND, WinId> g_winCache;
@@ -248,7 +252,7 @@ POINT g_resizeStart{}, g_pressPt{};
 std::wstring g_pressKey, g_dragKey;
 Bitmap* g_dragIcon = nullptr;
 
-// ---------------------------------------------------------------- yardımcılar
+// ---------------------------------------------------------------- helpers
 static std::wstring Lower(std::wstring s) {
     if (!s.empty()) CharLowerBuffW(&s[0], (DWORD)s.size());
     return s;
@@ -330,7 +334,7 @@ static PointF Pt(float m, float c) {
 }
 static float MainOf(LPARAM l) { return Horizontal() ? (float)GET_X_LPARAM(l) : (float)GET_Y_LPARAM(l); }
 
-// ---------------------------------------------------------------- süreç / uygulama bilgisi
+// ---------------------------------------------------------------- process / app info
 static std::wstring ProcPath(DWORD pid) {
     HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
     if (!h) return L"";
@@ -417,7 +421,7 @@ static std::wstring AppName(const std::wstring& aumid) {
     return r.empty() ? aumid : r;
 }
 
-// ---------------------------------------------------------------- simgeler
+// ---------------------------------------------------------------- icons
 static Bitmap* PixelsToBitmap(std::vector<DWORD>& px, int w, int h, PixelFormat fmt) {
     Bitmap* b = new Bitmap(w, h, fmt);
     BitmapData bd;
@@ -473,7 +477,7 @@ static Bitmap* HBitmapToBitmap(HBITMAP hb) {
     if (!alpha) for (auto& p : px) p |= 0xFF000000;
     return PixelsToBitmap(px, w, h, PixelFormat32bppPARGB);
 }
-// Jumbo listesi küçük simgeli exe'lerde 256'lık tuvalin köşesine 32px simge koyar; bunu yakala.
+// For exes with only small icons the jumbo list puts a 32px icon in the corner of a 256px canvas; detect that.
 static bool OnlyTopLeft(Bitmap* b) {
     int w = b->GetWidth(), h = b->GetHeight();
     if (w < 128) return false;
@@ -641,7 +645,7 @@ static HBITMAP SmallIconBitmap(const std::wstring& path) {
     return hb;
 }
 
-// ---------------------------------------------------------------- sabitlenenler + ayar dosyası
+// ---------------------------------------------------------------- pins + settings file
 static std::wstring KeyForLaunch(const std::wstring& l) {
     std::wstring a = AumidFromLaunch(l);
     if (!a.empty()) return L"aumid:" + Lower(a);
@@ -682,23 +686,23 @@ static bool AddPin(const std::wstring& launch, std::wstring name, int at = -1) {
 static void SaveIni() {
     FILE* f = _wfopen(g_iniPath.c_str(), L"wt, ccs=UTF-8");
     if (!f) return;
-    fwprintf(f, L"# Just Better TaskBar ayarları — değiştirdikten sonra dock'a sağ tıklayıp \"Ayarları yeniden yükle\"yi seçin.\n");
-    fwprintf(f, L"# size: simge boyutu (24-128)          magnify: büyütme yüzdesi (0 = kapalı, en çok 150)\n");
-    fwprintf(f, L"# position: 0 alt, 1 sol, 2 sağ       autohide: otomatik gizle (1/0)\n");
-    fwprintf(f, L"# autohide_delay: görünme gecikmesi ms  autohide_anim: kayma süresi ms (0 = animasyonsuz)\n");
-    fwprintf(f, L"# hide_taskbar: Windows görev çubuğunu gizle   reserve: tam ekran pencereler dock'un üstünde dursun\n");
-    fwprintf(f, L"# indicators: açık uygulama göstergesi   bounce: açılışta zıplama\n");
-    fwprintf(f, L"# minimized_style: küçültülmüş uygulamalar 0 normal, 1 soluk, 2 mavi çizgi (solmadan)\n");
-    fwprintf(f, L"# minimized_previews: küçültülen pencereler dock'un sağında canlı önizleme olarak dursun\n");
-    fwprintf(f, L"# separate_apps: 1 = sabitliler ayırıcının solunda, açıklar sağında (macOS); 0 = tek sıra (order= satırı sırayı tutar)\n");
-    fwprintf(f, L"# lock: dock'u kilitle (sıralama, ekleme/çıkarma ve boyut değişmez)\n");
-    fwprintf(f, L"# glass: buzlu cam   theme: 0 koyu, 1 açık, 2 sistem   opacity: raf örtücülüğü %% (10-100)   tooltips: isim balonları\n");
-    fwprintf(f, L"# attention: dikkat isteyeni zıplat   click_minimize: öndekine tıklayınca küçült   hide_fullscreen: tam ekranda gizle\n");
-    fwprintf(f, L"# show_launcher / show_running / show_trash: Başlat düğmesi / sabitlenmemiş açık uygulamalar / Geri Dönüşüm Kutusu\n");
-    fwprintf(f, L"# menubar: üst menü çubuğu   clock_date: saatte tarihi göster   clock_seconds: saniyeleri göster\n");
-    fwprintf(f, L"# tray_icons: arka plan uygulamalarının (Steam, Discord…) tepsi simgelerini menü çubuğunda göster\n");
-    fwprintf(f, L"# indicator_style: açık uygulama göstergesi 0 nokta, 1 gölgeleme, 2 mavi çizgi\n");
-    fwprintf(f, L"# pin=<yol>|<isim>   (.exe, .lnk, klasör = yığın, shell:AppsFolder\\<AppID>, #spacer = boşluk)\n\n");
+    fwprintf(f, L"# Just Better TaskBar settings — after editing, right-click the dock and choose \"Reload settings\".\n");
+    fwprintf(f, L"# size: icon size (24-128)          magnify: magnification percent (0 = off, max 150)\n");
+    fwprintf(f, L"# position: 0 bottom, 1 left, 2 right   autohide: auto-hide (1/0)\n");
+    fwprintf(f, L"# autohide_delay: show delay in ms   autohide_anim: slide duration in ms (0 = no animation)\n");
+    fwprintf(f, L"# hide_taskbar: hide the Windows taskbar   reserve: keep maximized windows above the dock\n");
+    fwprintf(f, L"# indicators: running app indicators   bounce: bounce when an app opens\n");
+    fwprintf(f, L"# minimized_style: minimized apps 0 normal, 1 dimmed, 2 blue line\n");
+    fwprintf(f, L"# minimized_previews: show minimized windows as live previews on the right\n");
+    fwprintf(f, L"# separate_apps: 1 = pinned apps left of the divider, open apps right (macOS); 0 = one row (order= keeps the order)\n");
+    fwprintf(f, L"# lock: lock the dock (no reordering, adding, removing or resizing)\n");
+    fwprintf(f, L"# glass: frosted glass   theme: 0 dark, 1 light, 2 system   opacity: shelf opacity %% (10-100)   tooltips: app name labels\n");
+    fwprintf(f, L"# attention: bounce apps that need attention   click_minimize: minimize the active app on click   hide_fullscreen: hide in full screen\n");
+    fwprintf(f, L"# show_launcher / show_running / show_trash: Start button / unpinned open apps / Recycle Bin\n");
+    fwprintf(f, L"# menubar: top menu bar   clock_date: show date in clock   clock_seconds: show seconds\n");
+    fwprintf(f, L"# tray_icons: show background app tray icons (Steam, Discord…) in the menu bar\n");
+    fwprintf(f, L"# indicator_style: running app indicator 0 dot, 1 highlight, 2 blue line\n");
+    fwprintf(f, L"# pin=<path>|<name>   (.exe, .lnk, folder = stack, shell:AppsFolder\\<AppID>, #spacer = spacer)   hide=<app> hides an app\n\n");
     fwprintf(f, L"size=%d\nmagnify=%d\nposition=%d\nautohide=%d\nautohide_delay=%d\nautohide_anim=%d\n", S.size, S.magnify,
              S.position, S.autohide ? 1 : 0, S.hideDelay, S.hideAnim);
     fwprintf(f, L"hide_taskbar=%d\nreserve=%d\nindicators=%d\nbounce=%d\nminimized_style=%d\nlock=%d\n\n", S.hideTaskbar ? 1 : 0,
@@ -729,6 +733,7 @@ static void SaveIni() {
         for (auto& k : g_appOrder) { if (!o.empty()) o += L'|'; o += k; }
         fwprintf(f, L"order=%ls\n", o.c_str());
     }
+    for (auto& k : g_hiddenApps) fwprintf(f, L"hide=%ls\n", k.c_str());
     fclose(f);
     SettingsChanged();
 }
@@ -736,6 +741,7 @@ static bool LoadIni() {
     FILE* f = _wfopen(g_iniPath.c_str(), L"rt, ccs=UTF-8");
     if (!f) return false;
     g_pins.clear();
+    g_hiddenApps.clear();
     static wchar_t line[32768];
     while (fgetws(line, 32768, f)) {
         std::wstring s = Trim(line);
@@ -761,6 +767,7 @@ static bool LoadIni() {
         else if (k == L"minimized_style") S.minimizedStyle = std::clamp(n, 0, 2);
         else if (k == L"minimized_previews") S.minimizedPreviews = n != 0;
         else if (k == L"separate_apps") S.separateApps = n != 0;
+        else if (k == L"hide") { if (!v.empty() && !IsHiddenApp(Lower(v))) g_hiddenApps.push_back(Lower(v)); }
         else if (k == L"order") {
             g_appOrder.clear();
             size_t a = 0;
@@ -800,7 +807,7 @@ static bool LoadIni() {
 static void DefaultPins() {
     wchar_t win[MAX_PATH];
     GetWindowsDirectoryW(win, MAX_PATH);
-    AddPin(std::wstring(win) + L"\\explorer.exe", L"Dosya Gezgini");
+    AddPin(std::wstring(win) + L"\\explorer.exe", L"File Explorer");
     wchar_t app[MAX_PATH] = {};
     GetEnvironmentVariableW(L"APPDATA", app, MAX_PATH);
     std::wstring dir = std::wstring(app) + L"\\Microsoft\\Internet Explorer\\Quick Launch\\User Pinned\\TaskBar\\";
@@ -824,7 +831,7 @@ static std::wstring DownloadsPath() {
 }
 static void AddDownloadsStack() {
     std::wstring p = DownloadsPath();
-    if (!p.empty()) AddPin(p, L"İndirilenler");
+    if (!p.empty()) AddPin(p, L"Downloads");
 }
 static bool HasDownloadsStack() {
     std::wstring k = Lower(DownloadsPath());
@@ -832,9 +839,9 @@ static bool HasDownloadsStack() {
     return false;
 }
 
-// ---------------------------------------------------------------- görev çubuğu + AppBar
-// Dock, Windows'a resmi bir AppBar olarak kaydedilir: ayrılan alanı Windows kendisi yönetir.
-// Gizli görev çubuğu alan ayırmasın diye otomatik gizleme moduna alınır (çıkışta eski hâline döner).
+// ---------------------------------------------------------------- taskbar + AppBar
+// The dock registers as a real AppBar, so Windows itself manages the reserved screen space.
+// The hidden taskbar is switched to auto-hide so it reserves no space (restored on exit).
 static const wchar_t* kRegKey = L"Software\\JustBetterTaskBar";
 static int ReserveH() {
     Geo g = G();
@@ -969,7 +976,7 @@ static RECT EdgeRect() {
     return r;
 }
 
-// ---------------------------------------------------------------- pencere listesi
+// ---------------------------------------------------------------- window list
 static bool IsAppWindow(HWND h) {
     if (h == g_hwnd || h == g_dragWnd || !IsWindowVisible(h)) return false;
     LONG_PTR ex = GetWindowLongPtrW(h, GWL_EXSTYLE);
@@ -1026,6 +1033,14 @@ static WinId Identify(HWND h) {
     }
     return w;
 }
+static std::wstring KeyForPid(DWORD pid) {
+    std::wstring lp = Lower(ProcPath(pid));
+    if (lp.find(L"\\windowsapps\\") != std::wstring::npos) {
+        std::wstring a = ProcAumid(pid);
+        if (!a.empty()) return L"aumid:" + Lower(a);
+    }
+    return lp;
+}
 static std::wstring RunningName(const Group& g) {
     auto f = g_names.find(g.key);
     if (f != g_names.end()) return f->second;
@@ -1071,6 +1086,11 @@ static void Refresh(bool force = false) {
         gp->wins.push_back(h);
     }
     g_winCache.swap(nc);
+    groups.erase(std::remove_if(groups.begin(), groups.end(), [](const Group& g) {
+        if (!IsHiddenApp(g.key)) return false;
+        for (auto& p : g_pins) if (p.key == g.key) return false;
+        return true;
+    }), groups.end());
 
     g_runOrder.erase(std::remove_if(g_runOrder.begin(), g_runOrder.end(), [&](const std::wstring& k) {
         for (auto& g : groups) if (g.key == k) return false;
@@ -1082,7 +1102,7 @@ static void Refresh(bool force = false) {
     std::vector<Item> items;
     if (S.showLauncher) {
         Item l;
-        l.kind = K_LAUNCHER; l.key = L"#launcher"; l.name = L"Başlat"; l.icon = LauncherIcon();
+        l.kind = K_LAUNCHER; l.key = L"#launcher"; l.name = L"Start"; l.icon = LauncherIcon();
         items.push_back(l);
     }
     std::vector<bool> used(groups.size(), false);
@@ -1168,7 +1188,7 @@ static void Refresh(bool force = false) {
         if (p.stack && !(g_dragging && g_dragRemove && p.key == g_dragKey)) items.push_back(pinItem(p));
     if (S.showTrash) {
         Item t;
-        t.kind = K_TRASH; t.key = L"#trash"; t.name = L"Geri Dönüşüm Kutusu"; t.icon = TrashIcon();
+        t.kind = K_TRASH; t.key = L"#trash"; t.name = L"Recycle Bin"; t.icon = TrashIcon();
         items.push_back(t);
     }
     g_items.swap(items);
@@ -1197,7 +1217,7 @@ static void Refresh(bool force = false) {
 }
 static void ScheduleRefresh() { SetTimer(g_hwnd, T_REFRESH, 60, nullptr); }
 
-// ---------------------------------------------------------------- yerleşim + çizim
+// ---------------------------------------------------------------- layout + drawing
 static float Ease(float t) { return t * t * (3 - 2 * t); }
 static void Layout() {
     Geo g = G();
@@ -1277,11 +1297,11 @@ static float BounceOffset(const std::wstring& key, ULONGLONG now, float h) {
     float ph = std::fmod(t, kPeriod) / kPeriod;
     return h * std::sin(ph * 3.14159265f);
 }
-// ---------------------------------------------------------------- buzlu cam + tema
-// Her pikseli saydam olabilen (katmanlı) pencerede Windows bulanıklık vermez. Bu yüzden rafın tam
-// arkasına ikinci bir pencere koyuyoruz. Bu pencere Windows Composition ile çizilir: arkadaki masaüstünün
-// bulanık hâli (HostBackdropBrush) istenen yarıçapta, kenarı yumuşatılmış yuvarlak bir şekille kırpılır.
-// Composition kullanılamazsa eski yönteme (accent blur + bölge) düşülür.
+// ---------------------------------------------------------------- frosted glass + theme
+// Windows can't blur behind a per-pixel-alpha (layered) window, so a second window sits right
+// behind the shelf. It is drawn with Windows Composition: the blurred desktop behind it
+// (HostBackdropBrush) is clipped to an anti-aliased rounded shape of any radius.
+// If Composition is unavailable it falls back to accent blur + a window region.
 winrt::Windows::System::DispatcherQueueController g_dq{nullptr};
 wuc::Compositor g_comp{nullptr};
 HINSTANCE g_hinst = nullptr;
@@ -1638,7 +1658,7 @@ static void UpdateDragWnd() {
             gr.DrawPath(&pen, &p);
         }
         if (g_dragRemove && g_font) {
-            SizeF ts = TooltipSize(gr, L"Kaldır");
+            SizeF ts = TooltipSize(gr, L"Remove");
             float tx = (W - ts.Width) / 2;
             GraphicsPath tp;
             RoundRectPath(tp, RectF(tx, 0, ts.Width, ts.Height), 7 * s);
@@ -1648,7 +1668,7 @@ static void UpdateDragWnd() {
             sf.SetAlignment(StringAlignmentCenter);
             sf.SetLineAlignment(StringAlignmentCenter);
             SolidBrush tc(Color(255, 245, 245, 247));
-            gr.DrawString(L"Kaldır", -1, g_font, RectF(tx, 0, ts.Width, ts.Height), &sf, &tc);
+            gr.DrawString(L"Remove", -1, g_font, RectF(tx, 0, ts.Width, ts.Height), &sf, &tc);
         }
     }
     POINT p;
@@ -1710,7 +1730,7 @@ static void UpdateEdgeTimer() {
     else KillTimer(g_hwnd, T_EDGE);
 }
 
-// ---------------------------------------------------------------- eylemler
+// ---------------------------------------------------------------- actions
 typedef void(WINAPI* SwitchToThisWindowFn)(HWND, BOOL);
 static void Activate(HWND h) {
     if (IsIconic(h)) ShowWindowAsync(h, SW_RESTORE);
@@ -1810,9 +1830,9 @@ static void ShowStack(int idx) {
         if (mii.hbmpItem) bmps.push_back(mii.hbmpItem);
         InsertMenuItemW(m, (UINT)i, TRUE, &mii);
     }
-    if (v.empty()) AppendMenuW(m, MF_STRING | MF_GRAYED, 0, L"(Klasör boş)");
+    if (v.empty()) AppendMenuW(m, MF_STRING | MF_GRAYED, 0, L"(Folder is empty)");
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(m, MF_STRING, ID_FOLDEROPEN, (L"\"" + it.name + L"\" klasörünü aç").c_str());
+    AppendMenuW(m, MF_STRING, ID_FOLDEROPEN, (L"Open \"" + it.name + L"\" folder").c_str());
     int cmd = RunMenu(m, idx);
     DestroyMenu(m);
     for (HBITMAP b : bmps) DeleteObject(b);
@@ -1882,85 +1902,85 @@ static HMENU BuildDockMenu() {
     HMENU d = CreatePopupMenu(), sz = CreatePopupMenu(), mg = CreatePopupMenu(), ps = CreatePopupMenu(), hd = CreatePopupMenu();
     for (int i = 0; i < 4; i++) AppendMenuW(sz, MF_STRING | (S.size == kSizes[i] ? MF_CHECKED : 0) | (S.locked ? MF_GRAYED : 0), ID_SIZE0 + i, kSizeNames[i]);
     AppendMenuW(sz, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(sz, MF_STRING | MF_GRAYED, 0, L"İnce ayar: ayırıcı çizgiyi sürükle");
-    AppendMenuW(sz, MF_STRING | MF_GRAYED, 0, L"ya da Ctrl + fare tekerleği");
+    AppendMenuW(sz, MF_STRING | MF_GRAYED, 0, L"Fine-tune: drag the divider");
+    AppendMenuW(sz, MF_STRING | MF_GRAYED, 0, L"or Ctrl + mouse wheel");
     for (int i = 0; i < 6; i++) AppendMenuW(mg, MF_STRING | (S.magnify == kMags[i] ? MF_CHECKED : 0), ID_MAG0 + i, kMagNames[i]);
     AppendMenuW(mg, MF_SEPARATOR, 0, nullptr);
     wchar_t cur[64];
-    swprintf(cur, 64, L"Şu an: %%%d   (Ctrl + Shift + tekerlek)", S.magnify);
+    swprintf(cur, 64, L"Current: %%%d   (Ctrl + Shift + wheel)", S.magnify);
     AppendMenuW(mg, MF_STRING | MF_GRAYED, 0, cur);
     for (int i = 0; i < 3; i++) AppendMenuW(ps, MF_STRING | (S.position == i ? MF_CHECKED : 0), ID_POS0 + i, kPosNames[i]);
-    AppendMenuW(hd, MF_STRING | MF_GRAYED, 0, L"Görünmeden önce bekleme");
+    AppendMenuW(hd, MF_STRING | MF_GRAYED, 0, L"Delay before showing");
     for (int i = 0; i < 4; i++) AppendMenuW(hd, MF_STRING | (S.hideDelay == kDelays[i] ? MF_CHECKED : 0), ID_DELAY0 + i, kDelayNames[i]);
     AppendMenuW(hd, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hd, MF_STRING | MF_GRAYED, 0, L"Kayma hızı");
+    AppendMenuW(hd, MF_STRING | MF_GRAYED, 0, L"Slide speed");
     for (int i = 0; i < 4; i++) AppendMenuW(hd, MF_STRING | (S.hideAnim == kAnims[i] ? MF_CHECKED : 0), ID_ANIM0 + i, kAnimNames[i]);
 
     auto chk = [](bool b) -> UINT { return MF_STRING | (b ? MF_CHECKED : 0); };
     HMENU look = CreatePopupMenu();
-    AppendMenuW(look, chk(S.glass), ID_GLASS, L"Buzlu cam arka plan");
+    AppendMenuW(look, chk(S.glass), ID_GLASS, L"Frosted glass background");
     AppendMenuW(look, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(look, MF_STRING | MF_GRAYED, 0, L"Renk");
+    AppendMenuW(look, MF_STRING | MF_GRAYED, 0, L"Color");
     for (int i = 0; i < 3; i++) AppendMenuW(look, chk(S.theme == i), ID_THEME0 + i, kThemeNames[i]);
     AppendMenuW(look, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(look, MF_STRING | MF_GRAYED, 0, L"Arka plan saydamlığı");
+    AppendMenuW(look, MF_STRING | MF_GRAYED, 0, L"Background transparency");
     for (int i = 0; i < 4; i++) AppendMenuW(look, chk(S.opacity == kOpacs[i]), ID_OPAC0 + i, kOpacNames[i]);
     AppendMenuW(look, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(look, chk(S.tooltips), ID_TIPS, L"Uygulama adlarını göster");
-    AppendMenuW(look, chk(S.indicators), ID_IND, L"Açık uygulamaların göstergesini göster");
+    AppendMenuW(look, chk(S.tooltips), ID_TIPS, L"Show app names");
+    AppendMenuW(look, chk(S.indicators), ID_IND, L"Show indicators for open apps");
     {
-        static const wchar_t* names[3] = {L"Gösterge: nokta", L"Gösterge: gölgeleme", L"Gösterge: mavi çizgi"};
+        static const wchar_t* names[3] = {L"Indicator: dot", L"Indicator: highlight", L"Indicator: blue line"};
         for (int i = 0; i < 3; i++)
             AppendMenuW(look, chk(S.indicatorStyle == i) | (S.indicators ? 0 : MF_GRAYED), ID_INDSTYLE0 + i, names[i]);
     }
     {
-        static const wchar_t* names[3] = {L"Küçültülmüşler: normal", L"Küçültülmüşler: soluk", L"Küçültülmüşler: mavi çizgi"};
+        static const wchar_t* names[3] = {L"Minimized: normal", L"Minimized: dimmed", L"Minimized: blue line"};
         for (int i = 0; i < 3; i++) AppendMenuW(look, chk(S.minimizedStyle == i), ID_MINSTYLE0 + i, names[i]);
     }
     HMENU beh = CreatePopupMenu();
-    AppendMenuW(beh, chk(S.bounce), ID_BOUNCE, L"Açılan uygulamaları zıplat");
-    AppendMenuW(beh, chk(S.attention), ID_ATTN, L"Dikkat isteyen uygulamaları zıplat");
-    AppendMenuW(beh, chk(S.clickMinimize), ID_CLICKMIN, L"Öndeki uygulamaya tıklayınca küçült");
-    AppendMenuW(beh, chk(S.hideFullscreen), ID_FULLHIDE, L"Tam ekran uygulamalarda dock'u gizle");
-    AppendMenuW(beh, chk(S.minimizedPreviews), ID_MINPREV, L"Küçültülen pencereleri sağda önizleme olarak göster");
+    AppendMenuW(beh, chk(S.bounce), ID_BOUNCE, L"Animate opening apps");
+    AppendMenuW(beh, chk(S.attention), ID_ATTN, L"Bounce apps that need attention");
+    AppendMenuW(beh, chk(S.clickMinimize), ID_CLICKMIN, L"Minimize the active app on click");
+    AppendMenuW(beh, chk(S.hideFullscreen), ID_FULLHIDE, L"Hide the dock in full-screen apps");
+    AppendMenuW(beh, chk(S.minimizedPreviews), ID_MINPREV, L"Show minimized windows as previews on the right");
     HMENU con = CreatePopupMenu();
     UINT lk = S.locked ? MF_GRAYED : 0;
-    AppendMenuW(con, chk(S.showLauncher), ID_SHOWLAUNCH, L"Başlat düğmesi");
-    AppendMenuW(con, chk(S.showRunning), ID_SHOWRUN, L"Sabitlenmemiş açık uygulamalar");
-    AppendMenuW(con, chk(S.separateApps), ID_SEPAPPS, L"Sabitli ve açık uygulamaları ayırıcıyla ayır");
-    AppendMenuW(con, chk(HasDownloadsStack()) | lk, ID_DOWNLOADS, L"İndirilenler yığını");
-    AppendMenuW(con, chk(S.showTrash), ID_SHOWTRASH, L"Geri Dönüşüm Kutusu");
+    AppendMenuW(con, chk(S.showLauncher), ID_SHOWLAUNCH, L"Start button");
+    AppendMenuW(con, chk(S.showRunning), ID_SHOWRUN, L"Unpinned open apps");
+    AppendMenuW(con, chk(S.separateApps), ID_SEPAPPS, L"Separate pinned and open apps with a divider");
+    AppendMenuW(con, chk(HasDownloadsStack()) | lk, ID_DOWNLOADS, L"Downloads stack");
+    AppendMenuW(con, chk(S.showTrash), ID_SHOWTRASH, L"Recycle Bin");
     AppendMenuW(con, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(con, MF_STRING | lk, ID_SPACER, L"Boşluk ekle");
+    AppendMenuW(con, MF_STRING | lk, ID_SPACER, L"Add spacer");
 
-    AppendMenuW(d, MF_STRING, ID_OPENSETTINGS, L"Ayarlar…");
+    AppendMenuW(d, MF_STRING, ID_OPENSETTINGS, L"Settings…");
     AppendMenuW(d, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(d, MF_POPUP, (UINT_PTR)sz, L"Simge boyutu");
-    AppendMenuW(d, MF_POPUP, (UINT_PTR)mg, L"Büyütme");
-    AppendMenuW(d, MF_POPUP, (UINT_PTR)ps, L"Ekrandaki konum");
-    AppendMenuW(d, MF_POPUP, (UINT_PTR)look, L"Görünüm");
-    AppendMenuW(d, MF_POPUP, (UINT_PTR)beh, L"Davranış");
-    AppendMenuW(d, MF_POPUP, (UINT_PTR)con, L"İçerik");
+    AppendMenuW(d, MF_POPUP, (UINT_PTR)sz, L"Icon size");
+    AppendMenuW(d, MF_POPUP, (UINT_PTR)mg, L"Magnification");
+    AppendMenuW(d, MF_POPUP, (UINT_PTR)ps, L"Position on screen");
+    AppendMenuW(d, MF_POPUP, (UINT_PTR)look, L"Appearance");
+    AppendMenuW(d, MF_POPUP, (UINT_PTR)beh, L"Behavior");
+    AppendMenuW(d, MF_POPUP, (UINT_PTR)con, L"Content");
     HMENU mb = CreatePopupMenu();
-    AppendMenuW(mb, chk(S.showMenubar), ID_BAR, L"Üst menü çubuğunu göster");
+    AppendMenuW(mb, chk(S.showMenubar), ID_BAR, L"Show the top menu bar");
     AppendMenuW(mb, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(mb, chk(S.clockDate) | (S.showMenubar ? 0 : MF_GRAYED), ID_BARDATE, L"Saatte tarihi göster");
-    AppendMenuW(mb, chk(S.clockSeconds) | (S.showMenubar ? 0 : MF_GRAYED), ID_BARSEC, L"Saniyeleri göster");
-    AppendMenuW(mb, chk(S.trayIcons) | (S.showMenubar ? 0 : MF_GRAYED), ID_BARTRAY, L"Arka plan uygulamalarının simgelerini göster");
-    AppendMenuW(d, MF_POPUP, (UINT_PTR)mb, L"Menü çubuğu");
+    AppendMenuW(mb, chk(S.clockDate) | (S.showMenubar ? 0 : MF_GRAYED), ID_BARDATE, L"Show date in clock");
+    AppendMenuW(mb, chk(S.clockSeconds) | (S.showMenubar ? 0 : MF_GRAYED), ID_BARSEC, L"Show seconds");
+    AppendMenuW(mb, chk(S.trayIcons) | (S.showMenubar ? 0 : MF_GRAYED), ID_BARTRAY, L"Show background app icons");
+    AppendMenuW(d, MF_POPUP, (UINT_PTR)mb, L"Menu bar");
     AppendMenuW(d, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(d, chk(S.autohide), ID_AUTOHIDE, L"Dock'u otomatik gizle ve göster");
-    AppendMenuW(d, MF_POPUP | (S.autohide ? 0 : MF_GRAYED), (UINT_PTR)hd, L"Gizleme ayarları");
+    AppendMenuW(d, chk(S.autohide), ID_AUTOHIDE, L"Automatically hide and show the dock");
+    AppendMenuW(d, MF_POPUP | (S.autohide ? 0 : MF_GRAYED), (UINT_PTR)hd, L"Hiding options");
     AppendMenuW(d, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(d, chk(S.locked), ID_LOCK, L"Dock'u kilitle");
-    AppendMenuW(d, MF_STRING | (S.hideTaskbar ? MF_CHECKED : 0), ID_HIDETB, L"Windows görev çubuğunu gizle");
-    AppendMenuW(d, MF_STRING | (S.reserve ? MF_CHECKED : 0) | (S.autohide ? MF_GRAYED : 0), ID_RESERVE, L"Tam ekran pencereler dock'un önünde dursun");
-    AppendMenuW(d, MF_STRING | (IsAutostart() ? MF_CHECKED : 0), ID_AUTOSTART, L"Windows ile başlat");
+    AppendMenuW(d, chk(S.locked), ID_LOCK, L"Lock the dock");
+    AppendMenuW(d, MF_STRING | (S.hideTaskbar ? MF_CHECKED : 0), ID_HIDETB, L"Hide the Windows taskbar");
+    AppendMenuW(d, MF_STRING | (S.reserve ? MF_CHECKED : 0) | (S.autohide ? MF_GRAYED : 0), ID_RESERVE, L"Keep windows above the dock");
+    AppendMenuW(d, MF_STRING | (IsAutostart() ? MF_CHECKED : 0), ID_AUTOSTART, L"Start with Windows");
     AppendMenuW(d, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(d, MF_STRING, ID_EDITINI, L"Ayar dosyasını aç");
-    AppendMenuW(d, MF_STRING, ID_RELOAD, L"Ayarları yeniden yükle");
+    AppendMenuW(d, MF_STRING, ID_EDITINI, L"Open settings file");
+    AppendMenuW(d, MF_STRING, ID_RELOAD, L"Reload settings");
     AppendMenuW(d, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(d, MF_STRING, ID_QUIT, L"Dock'tan çık");
+    AppendMenuW(d, MF_STRING, ID_QUIT, L"Quit Just Better TaskBar");
     return d;
 }
 static void ShowMenu(int idx) {
@@ -1981,33 +2001,34 @@ static void ShowMenu(int idx) {
         }
         if (!wins.empty()) AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
         if (!it.launch.empty()) {
-            AppendMenuW(m, MF_STRING, ID_OPEN, it.wins.empty() ? L"Aç" : L"Yeni pencere");
-            AppendMenuW(m, MF_STRING | lockFlag, ID_PIN, it.pinned ? L"Dock'tan kaldır" : L"Dock'ta tut");
+            AppendMenuW(m, MF_STRING, ID_OPEN, it.wins.empty() ? L"Open" : L"New Window");
+            AppendMenuW(m, MF_STRING | lockFlag, ID_PIN, it.pinned ? L"Remove from Dock" : L"Keep in Dock");
         }
-        if (!it.wins.empty()) AppendMenuW(m, MF_STRING, ID_CLOSEALL, it.wins.size() > 1 ? L"Tüm pencereleri kapat" : L"Kapat");
+        if (!it.wins.empty()) AppendMenuW(m, MF_STRING, ID_CLOSEALL, it.wins.size() > 1 ? L"Close All Windows" : L"Close");
+        if (!it.pinned && it.key.rfind(L"hwnd:", 0) != 0) AppendMenuW(m, MF_STRING, ID_HIDEAPP, L"Hide from dock");
         AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(m, MF_POPUP, (UINT_PTR)BuildDockMenu(), L"Dock ayarları");
+        AppendMenuW(m, MF_POPUP, (UINT_PTR)BuildDockMenu(), L"Dock settings");
     } else if (has && it.kind == K_STACK) {
-        AppendMenuW(m, MF_STRING, ID_STACKOPEN, L"İçeriği göster");
-        AppendMenuW(m, MF_STRING, ID_FOLDEROPEN, L"Klasörü aç");
-        AppendMenuW(m, MF_STRING | lockFlag, ID_REMOVE, L"Dock'tan kaldır");
+        AppendMenuW(m, MF_STRING, ID_STACKOPEN, L"Show contents");
+        AppendMenuW(m, MF_STRING, ID_FOLDEROPEN, L"Open folder");
+        AppendMenuW(m, MF_STRING | lockFlag, ID_REMOVE, L"Remove from Dock");
         AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(m, MF_POPUP, (UINT_PTR)BuildDockMenu(), L"Dock ayarları");
+        AppendMenuW(m, MF_POPUP, (UINT_PTR)BuildDockMenu(), L"Dock settings");
     } else if (has && it.kind == K_MINWIN && !it.wins.empty()) {
-        AppendMenuW(m, MF_STRING, ID_WIN0, L"Geri getir");
+        AppendMenuW(m, MF_STRING, ID_WIN0, L"Restore");
         wins.push_back(it.wins[0]);
-        AppendMenuW(m, MF_STRING, ID_CLOSEALL, L"Pencereyi kapat");
+        AppendMenuW(m, MF_STRING, ID_CLOSEALL, L"Close Window");
         AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(m, MF_POPUP, (UINT_PTR)BuildDockMenu(), L"Dock ayarları");
+        AppendMenuW(m, MF_POPUP, (UINT_PTR)BuildDockMenu(), L"Dock settings");
     } else if (has && it.kind == K_SPACER) {
-        AppendMenuW(m, MF_STRING | lockFlag, ID_REMOVE, L"Boşluğu kaldır");
+        AppendMenuW(m, MF_STRING | lockFlag, ID_REMOVE, L"Remove spacer");
         AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(m, MF_POPUP, (UINT_PTR)BuildDockMenu(), L"Dock ayarları");
+        AppendMenuW(m, MF_POPUP, (UINT_PTR)BuildDockMenu(), L"Dock settings");
     } else if (has && it.kind == K_TRASH) {
-        AppendMenuW(m, MF_STRING, ID_OPENTRASH, L"Aç");
-        AppendMenuW(m, MF_STRING | (g_trashFull ? 0 : MF_GRAYED), ID_EMPTYTRASH, L"Geri Dönüşüm Kutusunu boşalt");
+        AppendMenuW(m, MF_STRING, ID_OPENTRASH, L"Open");
+        AppendMenuW(m, MF_STRING | (g_trashFull ? 0 : MF_GRAYED), ID_EMPTYTRASH, L"Empty Recycle Bin");
         AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(m, MF_POPUP, (UINT_PTR)BuildDockMenu(), L"Dock ayarları");
+        AppendMenuW(m, MF_POPUP, (UINT_PTR)BuildDockMenu(), L"Dock settings");
     } else {
         DestroyMenu(m);
         m = BuildDockMenu();
@@ -2028,6 +2049,13 @@ static void ShowMenu(int idx) {
     case ID_CLOSEALL: for (HWND w : it.wins) PostMessageW(w, WM_CLOSE, 0, 0); return;
     case ID_OPENTRASH: OpenTrash(); return;
     case ID_EMPTYTRASH: SHEmptyRecycleBinW(g_hwnd, nullptr, 0); UpdateTrash(); return;
+    case ID_HIDEAPP:
+        if (!IsHiddenApp(it.key)) g_hiddenApps.push_back(it.key);
+        if (!g_names.count(it.key)) g_names[it.key] = it.name;
+        SaveIni();
+        Refresh(true);
+        RenderBar();
+        return;
     }
     DockCommand(cmd);
 }
@@ -2197,7 +2225,7 @@ static void Poll() {
     if (!g_dragging) Refresh();
 }
 
-// ---------------------------------------------------------------- sürükleme
+// ---------------------------------------------------------------- dragging
 static bool CanDrag(int idx) {
     if (S.locked || idx < 0 || idx >= (int)g_items.size()) return false;
     auto& it = g_items[idx];
@@ -2301,9 +2329,9 @@ static void FinishPress(POINT up, bool shift) {
     if (target >= 0) OnClick(target, shift);
     Render();
 }
-// Dock hiçbir zaman ön plan penceresi olmadığı için Windows, imleç dock'un saydam kısmına geçince fare
-// mesajlarını göndermeyi keser (sürükleme başlayınca büyütülmüş simgeler küçülüp imleç boşta kalır).
-// Bu yüzden basılı tutulan süre boyunca imleci ve tuşu kendimiz yoklarız.
+// The dock is never the foreground window, so Windows stops sending mouse messages once the
+// cursor is over a transparent part (magnified icons shrink when a drag starts).
+// So while the button is held we poll the cursor and button state ourselves.
 static void DragPoll() {
     if (!g_down && !g_dragging && !g_resizing) { KillTimer(g_hwnd, T_DRAG); return; }
     POINT p;
@@ -2330,7 +2358,7 @@ static void DragPoll() {
             if (g_items[k].key == g_pressKey && CanDrag((int)k)) { StartDrag((int)k); return; }
 }
 
-// ---------------------------------------------------------------- üst menü çubuğu (macOS menu bar)
+// ---------------------------------------------------------------- menu bar
 enum BarKind { B_LOGO, B_APP, B_MENU, B_SEARCH, B_NET, B_VOL, B_BATT, B_CC, B_CLOCK, B_TRAY };
 struct BarItem { BarKind kind; std::wstring text; int menuIndex = -1; float x = 0, w = 0; };
 Surface g_barSurf;
@@ -2338,7 +2366,7 @@ std::vector<BarItem> g_barItems;
 int g_barHover = -1, g_barOpen = -1, g_barNext = -1, g_menuClosedIdx = -1;
 ULONGLONG g_menuClosedAt = 0;
 HWND g_barApp = nullptr;
-std::wstring g_barAppName = L"Masaüstü", g_barAppKey, g_barAppLaunch;
+std::wstring g_barAppName = L"Desktop", g_barAppKey, g_barAppLaunch;
 std::vector<std::pair<std::wstring, int>> g_barMenus;
 bool g_barTracking = false, g_charging = false, g_mute = false;
 int g_netState = 0, g_volume = -1, g_batt = -1;
@@ -2390,7 +2418,7 @@ static void BarTrackForeground() {
     g_barAppKey.clear();
     g_barAppLaunch.clear();
     if (!app) {
-        g_barAppName = L"Masaüstü";
+        g_barAppName = L"Desktop";
     } else {
         WinId id = Identify(app);
         g_barAppKey = id.key;
@@ -2461,9 +2489,9 @@ static void UpdateBattery() {
     g_batt = ps.BatteryLifePercent;
     g_charging = ps.ACLineStatus == 1;
 }
-// ---- sistem tepsisi (Steam, Discord… simgeleri)
-// Uygulamalar Shell_NotifyIcon ile "Shell_TrayWnd" penceresine WM_COPYDATA gönderir. Bizim penceremiz z sırasında
-// Gezgini'ninkinden önde olduğu için mesajlar önce bize gelir; simgeyi kaydeder, mesajı aynen Gezgini'ne iletiriz.
+// ---- system tray (Steam, Discord… icons)
+// Apps send WM_COPYDATA to "Shell_TrayWnd" through Shell_NotifyIcon. Our window is above Explorer's
+// in z-order, so messages reach us first; we record the icon and forward the message to Explorer unchanged.
 struct NID32 {
     DWORD cbSize; DWORD hWnd; UINT uID; UINT uFlags; UINT uCallbackMessage; DWORD hIcon; WCHAR szTip[128];
     DWORD dwState; DWORD dwStateMask; WCHAR szInfo[256]; UINT uVersion; WCHAR szInfoTitle[64]; DWORD dwInfoFlags;
@@ -2471,7 +2499,7 @@ struct NID32 {
 };
 struct TrayData { DWORD signature; DWORD message; NID32 nid; };
 struct TrayIcon {
-    HWND hwnd = nullptr; UINT id = 0; GUID guid{}; bool hasGuid = false;
+    HWND hwnd = nullptr; UINT id = 0; GUID guid{}; bool hasGuid = false; std::wstring appKey;
     UINT cbMsg = 0, version = 0; std::wstring tip; Bitmap* bmp = nullptr; bool hidden = false; DWORD pid = 0;
 };
 std::vector<TrayIcon> g_tray;
@@ -2512,6 +2540,7 @@ static LRESULT TrayCopyData(WPARAM w, COPYDATASTRUCT* cds) {
                 t.id = n.uID;
                 if (n.uFlags & NIF_GUID) { t.guid = n.guidItem; t.hasGuid = true; }
                 GetWindowThreadProcessId(t.hwnd, &t.pid);
+                t.appKey = KeyForPid(t.pid);
                 TrayApply(t, n);
                 g_tray.push_back(t);
             } else {
@@ -2618,7 +2647,7 @@ static void BuildBarItems() {
     g_barItems.push_back({B_APP, g_barAppName});
     for (auto& m : g_barMenus) g_barItems.push_back({B_MENU, m.first, m.second});
     for (size_t i = 0; i < g_tray.size(); i++)
-        if (!g_tray[i].hidden && g_tray[i].bmp) g_barItems.push_back({B_TRAY, g_tray[i].tip, (int)i});
+        if (!g_tray[i].hidden && g_tray[i].bmp && !IsHiddenApp(g_tray[i].appKey)) g_barItems.push_back({B_TRAY, g_tray[i].tip, (int)i});
     g_barItems.push_back({B_SEARCH, L""});
     g_barItems.push_back({B_NET, L""});
     g_barItems.push_back({B_VOL, L""});
@@ -2769,40 +2798,40 @@ static std::vector<HWND> AppWindows(const std::wstring& key) {
 }
 static HMENU BuildLogoMenu() {
     HMENU m = CreatePopupMenu();
-    AppendMenuW(m, MF_STRING, ID_ABOUT, L"Bu bilgisayar hakkında");
+    AppendMenuW(m, MF_STRING, ID_ABOUT, L"About This PC");
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(m, MF_STRING, ID_SETTINGS, L"Sistem Ayarları…");
-    AppendMenuW(m, MF_STRING, ID_OPENSETTINGS, L"Dock ve menü çubuğu ayarları…");
-    AppendMenuW(m, MF_STRING, ID_START, L"Uygulamalar (Başlat)");
-    AppendMenuW(m, MF_STRING, ID_TASKMGR, L"Görev Yöneticisi…");
+    AppendMenuW(m, MF_STRING, ID_SETTINGS, L"System Settings…");
+    AppendMenuW(m, MF_STRING, ID_OPENSETTINGS, L"Just Better TaskBar Settings…");
+    AppendMenuW(m, MF_STRING, ID_START, L"Apps (Start)");
+    AppendMenuW(m, MF_STRING, ID_TASKMGR, L"Task Manager…");
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(m, MF_STRING, ID_SLEEP, L"Uyku");
-    AppendMenuW(m, MF_STRING, ID_RESTART, L"Yeniden başlat…");
-    AppendMenuW(m, MF_STRING, ID_SHUTDOWN, L"Bilgisayarı kapat…");
+    AppendMenuW(m, MF_STRING, ID_SLEEP, L"Sleep");
+    AppendMenuW(m, MF_STRING, ID_RESTART, L"Restart…");
+    AppendMenuW(m, MF_STRING, ID_SHUTDOWN, L"Shut Down…");
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(m, MF_STRING, ID_LOCKPC, L"Ekranı kilitle");
-    AppendMenuW(m, MF_STRING, ID_LOGOFF, L"Oturumu kapat…");
+    AppendMenuW(m, MF_STRING, ID_LOCKPC, L"Lock Screen");
+    AppendMenuW(m, MF_STRING, ID_LOGOFF, L"Sign Out…");
     return m;
 }
 static HMENU BuildAppMenu() {
     HMENU m = CreatePopupMenu();
     if (!g_barApp) {
-        AppendMenuW(m, MF_STRING, ID_APPNEW, L"Yeni Dosya Gezgini penceresi");
-        AppendMenuW(m, MF_STRING, ID_SHOWDESKTOP, L"Masaüstünü göster");
+        AppendMenuW(m, MF_STRING, ID_APPNEW, L"New File Explorer Window");
+        AppendMenuW(m, MF_STRING, ID_SHOWDESKTOP, L"Show Desktop");
         return m;
     }
     std::wstring q = L"\"" + g_barAppName + L"\"";
     if (!g_barAppLaunch.empty()) {
-        AppendMenuW(m, MF_STRING, ID_APPNEW, L"Yeni pencere");
+        AppendMenuW(m, MF_STRING, ID_APPNEW, L"New Window");
         AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
     }
-    AppendMenuW(m, MF_STRING, ID_APPHIDE, (q + L" uygulamasını gizle").c_str());
-    AppendMenuW(m, MF_STRING, ID_APPHIDEOTHERS, L"Diğerlerini gizle");
-    AppendMenuW(m, MF_STRING, ID_APPSHOWALL, L"Tümünü göster");
+    AppendMenuW(m, MF_STRING, ID_APPHIDE, (L"Hide " + g_barAppName).c_str());
+    AppendMenuW(m, MF_STRING, ID_APPHIDEOTHERS, L"Hide Others");
+    AppendMenuW(m, MF_STRING, ID_APPSHOWALL, L"Show All");
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(m, MF_STRING, ID_APPZOOM, IsZoomed(g_barApp) ? L"Önceki boyutuna getir" : L"Büyüt");
+    AppendMenuW(m, MF_STRING, ID_APPZOOM, IsZoomed(g_barApp) ? L"Restore Size" : L"Zoom");
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(m, MF_STRING, ID_APPQUIT, (q + L" uygulamasından çık").c_str());
+    AppendMenuW(m, MF_STRING, ID_APPQUIT, (L"Quit " + g_barAppName).c_str());
     return m;
 }
 static bool Confirm(const wchar_t* text) {
@@ -2815,10 +2844,10 @@ static void HandleBarCmd(int cmd) {
     case ID_START: SendWinKey(); break;
     case ID_TASKMGR: ShellExecuteW(nullptr, L"open", L"taskmgr.exe", nullptr, nullptr, SW_SHOWNORMAL); break;
     case ID_SLEEP: SetSuspendState(FALSE, FALSE, FALSE); break;
-    case ID_RESTART: if (Confirm(L"Bilgisayar şimdi yeniden başlatılsın mı?")) ShellExecuteW(nullptr, L"open", L"shutdown.exe", L"/r /t 0", nullptr, SW_HIDE); break;
-    case ID_SHUTDOWN: if (Confirm(L"Bilgisayar şimdi kapatılsın mı?")) ShellExecuteW(nullptr, L"open", L"shutdown.exe", L"/s /t 0", nullptr, SW_HIDE); break;
+    case ID_RESTART: if (Confirm(L"Restart the computer now?")) ShellExecuteW(nullptr, L"open", L"shutdown.exe", L"/r /t 0", nullptr, SW_HIDE); break;
+    case ID_SHUTDOWN: if (Confirm(L"Shut down the computer now?")) ShellExecuteW(nullptr, L"open", L"shutdown.exe", L"/s /t 0", nullptr, SW_HIDE); break;
     case ID_LOCKPC: LockWorkStation(); break;
-    case ID_LOGOFF: if (Confirm(L"Oturum şimdi kapatılsın mı? Kaydedilmemiş işler kaybolabilir.")) ExitWindowsEx(EWX_LOGOFF, 0); break;
+    case ID_LOGOFF: if (Confirm(L"Sign out now? Unsaved work may be lost.")) ExitWindowsEx(EWX_LOGOFF, 0); break;
     case ID_SHOWDESKTOP: SendCombo(VK_LWIN, 'D'); break;
     case ID_OPENSETTINGS: OpenSettings(); break;
     case ID_APPNEW:
@@ -2992,9 +3021,9 @@ static void CALLBACK OnForegroundEvent(HWINEVENTHOOK, DWORD, HWND, LONG, LONG, D
     if (!g_menuOpen) BarTrackForeground();
 }
 
-// ---------------------------------------------------------------- ayarlar penceresi
-// Görünüşün tamamı DesignTokens.h'den gelir; burada hiçbir renk ya da ölçü sabit yazılmaz.
-// Her kontrol, sağ tık menüsünün kullandığı DockCommand komutlarını çağırır (iki yer hep aynı davranır).
+// ---------------------------------------------------------------- settings window
+// All visuals come from DesignTokens.h; no colors or sizes are hard-coded here.
+// Every control calls the same DockCommand commands as the context menu, so both always behave the same.
 enum WType { W_HEADING, W_TOGGLE, W_SLIDER, W_SEGMENT, W_BUTTON };
 struct Widget {
     WType type = W_HEADING;
@@ -3015,14 +3044,14 @@ float g_setScroll = 0, g_setContentH = 0, g_setScale = 1;
 bool g_setTracking = false;
 std::vector<Widget> g_widgets;
 std::vector<RectF> g_sideRects;
-static const wchar_t* kSetPages[6] = {L"Dock", L"Görünüm", L"Davranış", L"İçerik", L"Menü çubuğu", L"Sistem"};
+static const wchar_t* kSetPages[6] = {L"Dock", L"Appearance", L"Behavior", L"Content", L"Menu bar", L"System"};
 static const wchar_t* kSetPageDesc[6] = {
-    L"Boyut, konum ve otomatik gizleme",
-    L"Arka plan, renk ve simge göstergeleri",
-    L"Tıklama ve animasyon davranışları",
-    L"Dock'ta hangi öğelerin görüneceği",
-    L"Üst menü çubuğu, saat ve tepsi simgeleri",
-    L"Windows görev çubuğu, başlangıç ve gelişmiş seçenekler",
+    L"Size, position and auto-hide",
+    L"Background, color and indicators",
+    L"Click and animation behavior",
+    L"What appears in the dock",
+    L"Top menu bar, clock and tray icons",
+    L"Windows taskbar, startup and advanced options",
 };
 
 static design::Tokens Tok() { return design::Make(LightTheme()); }
@@ -3080,81 +3109,98 @@ static void BuildSettingsPage() {
     auto barOn = [] { return S.showMenubar; };
     switch (g_setPage) {
     case 0:
-        Heading(L"Boyut");
-        Slider(L"Simge boyutu", L"Ayırıcıyı sürükleyerek de değişir", 24, 128, L" px",
+        Heading(L"Size");
+        Slider(L"Icon size", L"You can also drag the divider", 24, 128, L" px",
                [] { return S.size; }, [](int v) { S.size = v; Render(); }, [](int) { ApplySettingsChange(); }).enabled = unlocked;
-        Slider(L"Büyütme", L"Fare üzerine gelince büyüme", 0, 150, L" %",
+        Slider(L"Magnification", L"Zoom on hover", 0, 150, L" %",
                [] { return S.magnify; }, [](int v) { S.magnify = v; Render(); }, [](int) { ApplySettingsChange(); });
-        Heading(L"Konum");
-        Segment(L"Ekrandaki konum", L"", {L"Altta", L"Solda", L"Sağda"},
+        Heading(L"Position");
+        Segment(L"Position on screen", L"", {L"Bottom", L"Left", L"Right"},
                 [] { return S.position; }, [](int i) { DockCommand(ID_POS0 + i); });
-        Heading(L"Gizleme");
-        Toggle(L"Otomatik gizle ve göster", L"Fare ekran kenarına gelince dock görünür", [] { return S.autohide; }, ID_AUTOHIDE);
-        Segment(L"Görünme gecikmesi", L"", {L"Yok", L"0,2 sn", L"0,5 sn", L"1 sn"},
+        Heading(L"Hiding");
+        Toggle(L"Automatically hide and show", L"The dock appears when the pointer reaches the screen edge", [] { return S.autohide; }, ID_AUTOHIDE);
+        Segment(L"Show delay", L"", {L"None", L"0.2 s", L"0.5 s", L"1 s"},
                 [] { return IndexOf(kDelays, 4, S.hideDelay); }, [](int i) { DockCommand(ID_DELAY0 + i); }).enabled = autohideOn;
-        Segment(L"Kayma hızı", L"", {L"Anında", L"Hızlı", L"Normal", L"Yavaş"},
+        Segment(L"Slide speed", L"", {L"Instant", L"Fast", L"Normal", L"Slow"},
                 [] { return IndexOf(kAnims, 4, S.hideAnim); }, [](int i) { DockCommand(ID_ANIM0 + i); }).enabled = autohideOn;
-        Heading(L"Kilit");
-        Toggle(L"Dock'u kilitle", L"Sıralama, ekleme/çıkarma ve boyut değiştirilemez", [] { return S.locked; }, ID_LOCK);
+        Heading(L"Lock");
+        Toggle(L"Lock the dock", L"Prevents reordering, adding, removing and resizing", [] { return S.locked; }, ID_LOCK);
         break;
     case 1:
-        Heading(L"Arka plan");
-        Toggle(L"Buzlu cam", L"Dock ve menü çubuğunun arkasındaki masaüstünü bulanıklaştırır", [] { return S.glass; }, ID_GLASS);
-        Slider(L"Renk canlılığı", L"Camın arkasındaki renkler", 100, 250, L" %", [] { return S.glassSaturation; },
+        Heading(L"Background");
+        Toggle(L"Frosted glass", L"Blurs the desktop behind the dock and the menu bar", [] { return S.glass; }, ID_GLASS);
+        Slider(L"Color vibrancy", L"Colors behind the glass", 100, 250, L" %", [] { return S.glassSaturation; },
                [](int v) { S.glassSaturation = v; ApplyGlassBrush(g_glass); ApplyGlassBrush(g_barGlass); }, [](int) { SaveIni(); })
             .enabled = [] { return S.glass; };
-        Segment(L"Renk", L"", {L"Koyu", L"Açık", L"Sistem"}, [] { return S.theme; }, [](int i) { DockCommand(ID_THEME0 + i); });
-        Slider(L"Arka plan örtücülüğü", L"Düşük değer daha saydam", 10, 100, L" %",
+        Segment(L"Color", L"", {L"Dark", L"Light", L"System"}, [] { return S.theme; }, [](int i) { DockCommand(ID_THEME0 + i); });
+        Slider(L"Background opacity", L"Lower values are more transparent", 10, 100, L" %",
                [] { return S.opacity; }, [](int v) { S.opacity = v; Render(); RenderBar(); }, [](int) { SaveIni(); });
-        Heading(L"Simgeler");
-        Toggle(L"Uygulama adlarını göster", L"Simgenin üzerine gelince adı görünür", [] { return S.tooltips; }, ID_TIPS);
-        Toggle(L"Açık uygulamaların göstergesi", L"Çalışan uygulamayı işaretler", [] { return S.indicators; }, ID_IND);
-        Segment(L"Gösterge stili", L"Gölgeleme ve çizgi öndeki uygulamada belirginleşir", {L"Nokta", L"Gölgeleme", L"Mavi çizgi"},
+        Heading(L"Icons");
+        Toggle(L"Show app names", L"Shows the app name on hover", [] { return S.tooltips; }, ID_TIPS);
+        Toggle(L"Running app indicator", L"Marks running apps", [] { return S.indicators; }, ID_IND);
+        Segment(L"Indicator style", L"Highlight and line are stronger for the active app", {L"Dot", L"Highlight", L"Blue line"},
                 [] { return S.indicatorStyle; }, [](int i) { DockCommand(ID_INDSTYLE0 + i); }).enabled = [] { return S.indicators; };
-        Segment(L"Küçültülmüş uygulamalar", L"Bütün pencereleri küçültülmüş olanlar", {L"Normal", L"Soluk", L"Mavi çizgi"},
+        Segment(L"Minimized apps", L"Apps with all windows minimized", {L"Normal", L"Dimmed", L"Blue line"},
                 [] { return S.minimizedStyle; }, [](int i) { DockCommand(ID_MINSTYLE0 + i); });
         break;
     case 2:
-        Heading(L"Animasyonlar");
-        Toggle(L"Açılan uygulamaları zıplat", L"", [] { return S.bounce; }, ID_BOUNCE);
-        Toggle(L"Dikkat isteyen uygulamaları zıplat", L"Bildirim gönderen uygulamanın simgesi zıplar", [] { return S.attention; }, ID_ATTN);
-        Heading(L"Tıklama");
-        Toggle(L"Öndeki uygulamaya tıklayınca küçült", L"Kapalıyken macOS gibi hiçbir şey yapmaz", [] { return S.clickMinimize; }, ID_CLICKMIN);
-        Heading(L"Küçültme");
-        Toggle(L"Küçültülen pencereleri önizleme olarak göster", L"Dock'un sağında, çöpün yanında canlı küçük görüntü",
+        Heading(L"Animations");
+        Toggle(L"Animate opening apps", L"", [] { return S.bounce; }, ID_BOUNCE);
+        Toggle(L"Bounce apps that need attention", L"The icon bounces when an app needs attention", [] { return S.attention; }, ID_ATTN);
+        Heading(L"Clicking");
+        Toggle(L"Minimize the active app on click", L"When off, clicking does nothing (like macOS)", [] { return S.clickMinimize; }, ID_CLICKMIN);
+        Heading(L"Minimizing");
+        Toggle(L"Show minimized windows as previews", L"Live thumbnails next to the Recycle Bin",
                [] { return S.minimizedPreviews; }, ID_MINPREV);
-        Heading(L"Tam ekran");
-        Toggle(L"Tam ekran uygulamalarda gizle", L"Oyun ve videolarda dock ile menü çubuğu kaybolur", [] { return S.hideFullscreen; }, ID_FULLHIDE);
+        Heading(L"Full screen");
+        Toggle(L"Hide in full-screen apps", L"Hides the dock and the menu bar in games and videos", [] { return S.hideFullscreen; }, ID_FULLHIDE);
         break;
     case 3:
-        Heading(L"Dock'ta görünenler");
-        Toggle(L"Başlat düğmesi", L"", [] { return S.showLauncher; }, ID_SHOWLAUNCH);
-        Toggle(L"Sabitlenmemiş açık uygulamalar", L"Sabitli olmayan çalışan uygulamalar da görünür", [] { return S.showRunning; }, ID_SHOWRUN);
-        Toggle(L"Sabitli ve açık uygulamaları ayır", L"Kapalıyken hepsi tek sırada, istediğin gibi dizilir", [] { return S.separateApps; }, ID_SEPAPPS);
-        Toggle(L"İndirilenler yığını", L"Tıklayınca son indirilen dosyalar listelenir", [] { return HasDownloadsStack(); }, ID_DOWNLOADS).enabled = unlocked;
-        Toggle(L"Geri Dönüşüm Kutusu", L"", [] { return S.showTrash; }, ID_SHOWTRASH);
-        Heading(L"Düzen");
-        Button(L"Boşluk ekle", L"Simgeler arasına boş alan koyar; sürükleyerek taşıyabilirsin", L"Ekle",
+        Heading(L"Shown in the dock");
+        Toggle(L"Start button", L"", [] { return S.showLauncher; }, ID_SHOWLAUNCH);
+        Toggle(L"Unpinned open apps", L"Also shows running apps that aren't pinned", [] { return S.showRunning; }, ID_SHOWRUN);
+        Toggle(L"Separate pinned and open apps", L"When off, all apps share one row in any order", [] { return S.separateApps; }, ID_SEPAPPS);
+        Toggle(L"Downloads stack", L"Lists recent downloads when clicked", [] { return HasDownloadsStack(); }, ID_DOWNLOADS).enabled = unlocked;
+        Toggle(L"Recycle Bin", L"", [] { return S.showTrash; }, ID_SHOWTRASH);
+        if (!g_hiddenApps.empty()) {
+            Heading(L"Hidden apps");
+            for (auto& k : g_hiddenApps) {
+                std::wstring name;
+                if (g_names.count(k)) name = g_names[k];
+                else if (k.rfind(L"aumid:", 0) == 0) name = AppName(k.substr(6));
+                else name = FileDesc(k);
+                std::wstring key = k;
+                Button(name.c_str(), L"Hidden from the dock and the menu bar", L"Show", [key] {
+                    g_hiddenApps.erase(std::remove(g_hiddenApps.begin(), g_hiddenApps.end(), key), g_hiddenApps.end());
+                    SaveIni();
+                    Refresh(true);
+                    RenderBar();
+                    PostMessageW(g_setWnd, WM_APP + 1, 0, 0);
+                });
+            }
+        }
+        Heading(L"Layout");
+        Button(L"Add spacer", L"Adds empty space between icons; drag it to move it", L"Add",
                [] { DockCommand(ID_SPACER); }).enabled = unlocked;
         break;
     case 4:
-        Heading(L"Menü çubuğu");
-        Toggle(L"Üst menü çubuğunu göster", L"", [] { return S.showMenubar; }, ID_BAR);
-        Toggle(L"Arka plan uygulamalarının simgeleri", L"Steam, Discord gibi tepsi simgeleri", [] { return S.trayIcons; }, ID_BARTRAY).enabled = barOn;
-        Heading(L"Saat");
-        Toggle(L"Tarihi göster", L"", [] { return S.clockDate; }, ID_BARDATE).enabled = barOn;
-        Toggle(L"Saniyeleri göster", L"", [] { return S.clockSeconds; }, ID_BARSEC).enabled = barOn;
+        Heading(L"Menu bar");
+        Toggle(L"Show the top menu bar", L"", [] { return S.showMenubar; }, ID_BAR);
+        Toggle(L"Background app icons", L"Tray icons such as Steam and Discord", [] { return S.trayIcons; }, ID_BARTRAY).enabled = barOn;
+        Heading(L"Clock");
+        Toggle(L"Show date", L"", [] { return S.clockDate; }, ID_BARDATE).enabled = barOn;
+        Toggle(L"Show seconds", L"", [] { return S.clockSeconds; }, ID_BARSEC).enabled = barOn;
         break;
     case 5:
         Heading(L"Windows");
-        Toggle(L"Windows görev çubuğunu gizle", L"", [] { return S.hideTaskbar; }, ID_HIDETB);
-        Toggle(L"Pencereler dock'un üstünde dursun", L"Büyütülen pencereler dock'un altına girmez", [] { return S.reserve; }, ID_RESERVE)
+        Toggle(L"Hide the Windows taskbar", L"", [] { return S.hideTaskbar; }, ID_HIDETB);
+        Toggle(L"Keep windows above the dock", L"Maximized windows don't cover the dock", [] { return S.reserve; }, ID_RESERVE)
             .enabled = [] { return !S.autohide; };
-        Toggle(L"Windows ile başlat", L"Oturum açınca dock otomatik çalışır", [] { return IsAutostart(); }, ID_AUTOSTART);
-        Heading(L"Gelişmiş");
-        Button(L"Ayar dosyası", L"dock.ini dosyasını Not Defteri'nde açar", L"Aç", [] { DockCommand(ID_EDITINI); });
-        Button(L"Ayarları yeniden yükle", L"dock.ini'de elle yaptığın değişiklikleri uygular", L"Yükle", [] { DockCommand(ID_RELOAD); });
-        Button(L"Dock'tan çık", L"Windows görev çubuğu geri gelir", L"Çık", [] { DockCommand(ID_QUIT); }).danger = true;
+        Toggle(L"Start with Windows", L"Starts automatically when you sign in", [] { return IsAutostart(); }, ID_AUTOSTART);
+        Heading(L"Advanced");
+        Button(L"Settings file", L"Opens dock.ini in Notepad", L"Open", [] { DockCommand(ID_EDITINI); });
+        Button(L"Reload settings", L"Applies changes made to dock.ini by hand", L"Reload", [] { DockCommand(ID_RELOAD); });
+        Button(L"Quit Just Better TaskBar", L"The Windows taskbar comes back", L"Quit", [] { DockCommand(ID_QUIT); }).danger = true;
         break;
     }
 }
@@ -3509,6 +3555,11 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             InvalidateRect(h, nullptr, FALSE);
         }
         return 0;
+    case WM_APP + 1:  // page content changed (e.g. a hidden app was restored)
+        g_setHover = -1;
+        BuildSettingsPage();
+        InvalidateRect(h, nullptr, FALSE);
+        return 0;
     case WM_CAPTURECHANGED:
         g_setDrag = -1;
         return 0;
@@ -3564,7 +3615,7 @@ static void OpenSettings() {
     AdjustWindowRectExForDpi(&r, style, FALSE, 0, dpi);
     int w = r.right - r.left, hgt = r.bottom - r.top;
     int x = (mi.rcWork.left + mi.rcWork.right - w) / 2, y = (mi.rcWork.top + mi.rcWork.bottom - hgt) / 2;
-    g_setWnd = CreateWindowExW(0, L"JustBetterTaskBarSettings", L"Just Better TaskBar Ayarları", style, x, y, w, hgt, nullptr, nullptr, g_hinst, nullptr);
+    g_setWnd = CreateWindowExW(0, L"JustBetterTaskBarSettings", L"Just Better TaskBar Settings", style, x, y, w, hgt, nullptr, nullptr, g_hinst, nullptr);
     if (!g_setWnd) return;
     g_setPage = 0;
     g_setScroll = 0;
@@ -3574,7 +3625,7 @@ static void OpenSettings() {
     SetForegroundWindow(g_setWnd);
 }
 
-// ---------------------------------------------------------------- pencere yordamı
+// ---------------------------------------------------------------- window procedure
 static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     if (g_shellMsg && m == g_shellMsg) {
         if (w == HSHELL_FLASH && S.attention) {
@@ -3836,7 +3887,7 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, PWSTR cmdLine, int) {
     wb.lpszClassName = L"JustBetterTaskBarBar";
     RegisterClassExW(&wb);
     g_barWnd = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
-                               wb.lpszClassName, L"Just Better TaskBar menü çubuğu", WS_POPUP, 0, 0, 1, 1, nullptr, nullptr, hi, nullptr);
+                               wb.lpszClassName, L"Just Better TaskBar menu bar", WS_POPUP, 0, 0, 1, 1, nullptr, nullptr, hi, nullptr);
     g_sysLight = ReadSysLight();
     g_scale = GetDpiForWindow(g_hwnd) / 96.0f;
     CreateFontObj();
