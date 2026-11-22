@@ -6,8 +6,6 @@
 *.ilk
 *.manifest
 
-# Personal settings (created on first run on each machine)
 dock.ini
 
-# Generated preview
 icon_preview.png
