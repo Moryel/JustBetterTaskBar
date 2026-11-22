@@ -7,6 +7,10 @@
 <p align="center">A lightweight macOS-style dock and menu bar for Windows.<br>
 Single native executable, no runtime, around 12 MB of memory.</p>
 
+<p align="center">
+  <img src="docs/dock.png" alt="Just Better TaskBar dock">
+</p>
+
 ---
 
 ## Features
