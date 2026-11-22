@@ -69,3 +69,7 @@ This produces `src\JustBetterTaskBar.exe`.
 | `JustBetterTaskBar.exe --quit` | Quit and bring back the Windows taskbar |
 
 If the app is ever closed from Task Manager, start it again and quit it normally to restore the Windows taskbar.
+
+## License
+
+[MIT](LICENSE)
