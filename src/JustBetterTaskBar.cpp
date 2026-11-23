@@ -699,7 +699,7 @@ static void SaveIni() {
     fwprintf(f, L"# minimized_previews: show minimized windows as live previews on the right\n");
     fwprintf(f, L"# separate_apps: 1 = pinned apps left of the divider, open apps right (macOS); 0 = one row (order= keeps the order)\n");
     fwprintf(f, L"# lock: lock the dock (no reordering, adding, removing or resizing)\n");
-    fwprintf(f, L"# glass: glass background   glass_style: 0 frosted, 1 liquid (beta)\n");
+    fwprintf(f, L"# glass: glass background   glass_style: 0 frosted, 1 liquid, 2 clear (beta)\n");
     fwprintf(f, L"# theme: 0 dark, 1 light, 2 system   opacity: shelf opacity %% (10-100)   tooltips: app name labels\n");
     fwprintf(f, L"# attention: bounce apps that need attention   click_minimize: minimize the active app on click   hide_fullscreen: hide in full screen\n");
     fwprintf(f, L"# show_launcher / show_running / show_trash: Start button / unpinned open apps / Recycle Bin\n");
@@ -786,7 +786,7 @@ static bool LoadIni() {
         else if (k == L"lock") S.locked = n != 0;
         else if (k == L"glass") S.glass = n != 0;
         else if (k == L"glass_saturation") S.glassSaturation = std::clamp(n, 100, 250);
-        else if (k == L"glass_style") S.glassStyle = std::clamp(n, 0, 1);
+        else if (k == L"glass_style") S.glassStyle = std::clamp(n, 0, 2);
         else if (k == L"theme") S.theme = std::clamp(n, 0, 2);
         else if (k == L"opacity") S.opacity = std::clamp(n, 10, 100);
         else if (k == L"tooltips") S.tooltips = n != 0;
@@ -1379,7 +1379,7 @@ static bool LightTheme();
 static void ApplyGlassBrush(Glass& gl) {
     if (!gl.comp || !gl.visual) return;
     if (&gl == &g_glass && liquid::Active()) {
-        liquid::SetLook(LightTheme(), S.glassSaturation / 100.0f, g_scale);
+        liquid::SetLook(LightTheme(), S.glassSaturation / 100.0f, g_scale, S.glassStyle - 1);
         return;
     }
     auto backdrop = g_comp.CreateHostBackdropBrush();
@@ -1471,7 +1471,7 @@ static void SetCaptureExclusion(bool on) {
         if (h) SetWindowDisplayAffinity(h, on ? WDA_EXCLUDEFROMCAPTURE : WDA_NONE);
 }
 static void SyncLiquid() {
-    bool want = S.glass && S.glassStyle == 1 && g_glass.comp && !g_liquidFailed;
+    bool want = S.glass && S.glassStyle >= 1 && g_glass.comp && !g_liquidFailed;
     if (want && !liquid::Active()) {
         SetCaptureExclusion(true);
         if (liquid::Start(g_glass.wnd, g_comp, g_glass.visual, g_scale, LightTheme(), S.glassSaturation / 100.0f, g_hwnd, WM_LIQUIDACCESS)) {
@@ -1487,7 +1487,7 @@ static void SyncLiquid() {
         ApplyGlassBrush(g_glass);
         g_glass.rc = RECT{};
     }
-    if (liquid::Active()) liquid::SetLook(LightTheme(), S.glassSaturation / 100.0f, g_scale);
+    if (liquid::Active()) liquid::SetLook(LightTheme(), S.glassSaturation / 100.0f, g_scale, S.glassStyle - 1);
 }
 static void UpdateGlass(RectF shelf, float radius) {
     SyncLiquid();
@@ -2133,6 +2133,7 @@ static void DockCommand(int cmd) {
     case ID_GLASS: S.glass = !S.glass; SaveIni(); g_glass.rc = g_barGlass.rc = RECT{}; Render(); RenderBar(); break;
     case ID_GLASSSTYLE0:
     case ID_GLASSSTYLE0 + 1:
+    case ID_GLASSSTYLE0 + 2:
         S.glassStyle = cmd - ID_GLASSSTYLE0;
         g_liquidFailed = false;
         SaveIni();
@@ -3178,8 +3179,8 @@ static void BuildSettingsPage() {
     case 1:
         Heading(L"Background");
         Toggle(L"Glass background", L"Blurs the desktop behind the dock and the menu bar", [] { return S.glass; }, ID_GLASS);
-        Segment(L"Dock glass", L"Liquid bends the desktop at the edges. The dock is left out of screenshots while it's on",
-                {L"Frosted", L"Liquid (beta)"}, [] { return S.glassStyle; }, [](int i) { DockCommand(ID_GLASSSTYLE0 + i); })
+        Segment(L"Dock glass", L"Liquid and Clear (beta) bend the desktop at the edges. The dock is left out of screenshots while they're on",
+                {L"Frosted", L"Liquid", L"Clear"}, [] { return S.glassStyle; }, [](int i) { DockCommand(ID_GLASSSTYLE0 + i); })
             .enabled = [] { return S.glass; };
         Slider(L"Color vibrancy", L"Colors behind the glass", 100, 250, L" %", [] { return S.glassSaturation; },
                [](int v) { S.glassSaturation = v; ApplyGlassBrush(g_glass); ApplyGlassBrush(g_barGlass); }, [](int) { SaveIni(); })

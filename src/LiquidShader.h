@@ -10,7 +10,7 @@ cbuffer C : register(b0) {
     float2 size; float2 offs;
     float2 tex; float radius; float scale;
     float sat; float refr; float edge; float spacing;
-    float lod; float light; float2 unused;
+    float lod; float light; float mode; float unused;
 };
 Texture2D src : register(t0);
 SamplerState smp : register(s0);
@@ -44,6 +44,24 @@ float4 PS(float4 pos : SV_Position) : SV_Target {
     n /= max(length(n), 1e-4);
     float depth = -d;
 
+    // clear mode, fitted to a macOS 27 dock: no blur, the rim magnifies the backdrop from
+    // further inside, a veil made from the darkened backdrop color lowers contrast, a bright
+    // line runs along the edge (strongest on top) with a faint dark line inside it on the sides
+    if (mode > 0.5) {
+        float tc = saturate(1 - depth / edge);
+        float2 q = offs + pos.xy + n * refr * tc * tc * tc;
+        float3 cc = src.SampleLevel(smp, q / tex, 0).rgb;
+        float3 avg = src.SampleLevel(smp, (offs + pos.xy) / tex, 4).rgb;
+        float3 veil = light > 0.5 ? lerp(0.90.xxx, avg, 0.2) : float3(0.006, 0.012, 0.056) + avg * 0.568;
+        cc = cc * 0.69 + veil * 0.31;
+        float up = max(-n.y, 0), dn = max(n.y, 0);
+        float rimAmp = 0.174 * up * up + 0.142 * dn * dn + 0.058 * n.x * n.x;
+        cc += rimAmp * saturate(1 - abs(depth - 0.4 * scale) / (0.986 * scale));
+        cc -= 0.052 * n.x * n.x * saturate(1 - abs(depth - 2.1 * scale) / scale);
+        cc -= 0.014 * tc;
+        return float4(saturate(cc), 1);
+    }
+
     // refraction: the rounded rim pulls the backdrop from just outside the shape inwards
     float t = saturate(1 - depth / edge);
     float bend = refr * pow(t, 2.5);
@@ -69,11 +87,12 @@ struct CB {
     float size[2], offs[2];
     float tex[2], radius, scale;
     float sat, refr, edge, spacing;
-    float lod, light, unused[2];
+    float lod, light, mode, unused;
 };
 
 // w, h: glass size; ox, oy: glass top-left inside the backdrop texture; tw, th: backdrop size.
-inline CB MakeCB(int w, int h, float ox, float oy, int tw, int th, float radius, float scale, bool light, float sat) {
+// mode 0: frosted liquid glass, mode 1: clear (fitted to macOS 27)
+inline CB MakeCB(int w, int h, float ox, float oy, int tw, int th, float radius, float scale, bool light, float sat, int mode = 0) {
     CB c{};
     c.size[0] = (float)w;
     c.size[1] = (float)h;
@@ -89,6 +108,12 @@ inline CB MakeCB(int w, int h, float ox, float oy, int tw, int th, float radius,
     c.lod = std::log2(std::max(scale * 4.0f, 1.0f));
     c.spacing = std::exp2(c.lod) * 0.75f;
     c.light = light ? 1.0f : 0.0f;
+    c.mode = (float)mode;
+    if (mode == 1) {
+        float t = (float)std::min(w, h);
+        c.edge = 0.29f * t;
+        c.refr = -0.32f * t;
+    }
     return c;
 }
 

@@ -53,6 +53,7 @@ struct State {
     RECT rc{};
     RECT bandRc{};
     float radius = 0, scale = 1, sat = 1.8f;
+    int mode = 0;
     bool light = false;
     HWND notify = nullptr;
     UINT notifyMsg = 0;
@@ -78,7 +79,7 @@ static void RenderLocked() {
     if (FAILED(g.dev->CreateRenderTargetView(bb.get(), nullptr, rtv.put()))) return;
 
     CB c = MakeCB(w, h, (float)(g.rc.left - g.monRc.left - g.bandRc.left), (float)(g.rc.top - g.monRc.top - g.bandRc.top),
-                  g.bandRc.right - g.bandRc.left, g.bandRc.bottom - g.bandRc.top, g.radius, g.scale, g.light, g.sat);
+                  g.bandRc.right - g.bandRc.left, g.bandRc.bottom - g.bandRc.top, g.radius, g.scale, g.light, g.sat, g.mode);
     g.ctx->UpdateSubresource(g.cb.get(), 0, nullptr, &c, 0, 0);
 
     float clear[4] = {0, 0, 0, 0};
@@ -254,10 +255,11 @@ inline void Place(RECT rect, float radius) {
     }
 }
 
-inline void SetLook(bool light, float sat, float scale) {
+inline void SetLook(bool light, float sat, float scale, int mode) {
     if (!g.active) return;
     std::lock_guard<std::mutex> lk(g.mtx);
-    if (light == g.light && sat == g.sat && scale == g.scale) return;
+    if (light == g.light && sat == g.sat && scale == g.scale && mode == g.mode) return;
+    g.mode = mode;
     g.light = light;
     g.sat = sat;
     g.scale = scale;
