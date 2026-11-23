@@ -37,6 +37,12 @@ Single native executable, no runtime, around 12 MB of memory.</p>
 - Reserves screen space so maximized windows stay clear of the dock
 - Hides itself in full-screen games and videos
 
+## Download
+
+Get `JustBetterTaskBar-Setup-<version>.exe` from the [latest release](https://github.com/Moryel/JustBetterTaskBar/releases/latest) and run it. It installs for your user only, no admin rights needed, and can start the dock when you sign in. Uninstalling brings the Windows taskbar back.
+
+The installer isn't code-signed, so Windows SmartScreen may warn the first time. Choose **More info** → **Run anyway**.
+
 ## Settings
 
 Right-click the dock and choose **Settings…**, or run `JustBetterTaskBar.exe --settings`.
@@ -59,7 +65,7 @@ cd src
 build.bat
 ```
 
-This produces `src\JustBetterTaskBar.exe`.
+This produces `src\JustBetterTaskBar.exe`. To build the installer, compile `installer\JustBetterTaskBar.iss` with [Inno Setup](https://jrsoftware.org/isinfo.php) 6; it is written to `dist\`.
 
 ## Usage
 
