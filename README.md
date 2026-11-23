@@ -24,6 +24,7 @@ Single native executable, no runtime, around 12 MB of memory.</p>
 - Folder stacks (Downloads by default) and the Recycle Bin
 - Bottom, left or right position, auto-hide with adjustable delay and speed
 - Frosted glass background with adjustable vibrancy, light and dark themes
+- Liquid glass (beta): lighter blur with refraction and a specular rim at the edges. While it's on, the dock and the menu bar don't appear in screenshots
 - Hide any app from the dock and the menu bar
 
 **Menu bar**

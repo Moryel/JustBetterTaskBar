@@ -86,6 +86,7 @@ struct Settings {
     bool locked = false;
     bool glass = true;
     int glassSaturation = 180;
+    int glassStyle = 0;
     int theme = 0;
     int opacity = 45;
     bool tooltips = true;
@@ -168,7 +169,7 @@ enum {
     ID_REMOVE, ID_STACKOPEN, ID_FOLDEROPEN,
     ID_GLASS = 70, ID_THEME0 = 71, ID_OPAC0 = 74, ID_TIPS = 80, ID_ATTN, ID_CLICKMIN, ID_FULLHIDE,
     ID_SHOWLAUNCH, ID_SHOWRUN, ID_SHOWTRASH, ID_DOWNLOADS, ID_BAR = 95, ID_BARDATE, ID_BARSEC, ID_BARTRAY, ID_OPENSETTINGS,
-    ID_OPEN = 100, ID_PIN, ID_CLOSEALL, ID_INDSTYLE0 = 120, ID_MINSTYLE0 = 125, ID_MINPREV = 128, ID_SEPAPPS = 129, ID_HIDEAPP = 130, ID_WIN0 = 200, ID_FILE0 = 300
+    ID_OPEN = 100, ID_PIN, ID_CLOSEALL, ID_INDSTYLE0 = 120, ID_MINSTYLE0 = 125, ID_MINPREV = 128, ID_SEPAPPS = 129, ID_HIDEAPP = 130, ID_GLASSSTYLE0 = 131, ID_WIN0 = 200, ID_FILE0 = 300
 };
 static const int kSizes[4] = {40, 50, 64, 80};
 static const wchar_t* kSizeNames[4] = {L"Small", L"Medium", L"Large", L"Extra large"};
@@ -184,8 +185,10 @@ static const int kOpacs[4] = {25, 45, 65, 85};
 static const wchar_t* kOpacNames[4] = {L"Very transparent", L"Transparent", L"Slightly transparent", L"Almost opaque"};
 static const float kPeriod = 0.6f;
 const UINT WM_APPBAR = WM_APP + 1;
+const UINT WM_LIQUIDACCESS = WM_APP + 6;
 
 namespace wuc = winrt::Windows::UI::Composition;
+#include "LiquidGlass.h"
 struct Glass {
     HWND wnd = nullptr;
     RECT rc{};
@@ -696,7 +699,8 @@ static void SaveIni() {
     fwprintf(f, L"# minimized_previews: show minimized windows as live previews on the right\n");
     fwprintf(f, L"# separate_apps: 1 = pinned apps left of the divider, open apps right (macOS); 0 = one row (order= keeps the order)\n");
     fwprintf(f, L"# lock: lock the dock (no reordering, adding, removing or resizing)\n");
-    fwprintf(f, L"# glass: frosted glass   theme: 0 dark, 1 light, 2 system   opacity: shelf opacity %% (10-100)   tooltips: app name labels\n");
+    fwprintf(f, L"# glass: glass background   glass_style: 0 frosted, 1 liquid (beta)\n");
+    fwprintf(f, L"# theme: 0 dark, 1 light, 2 system   opacity: shelf opacity %% (10-100)   tooltips: app name labels\n");
     fwprintf(f, L"# attention: bounce apps that need attention   click_minimize: minimize the active app on click   hide_fullscreen: hide in full screen\n");
     fwprintf(f, L"# show_launcher / show_running / show_trash: Start button / unpinned open apps / Recycle Bin\n");
     fwprintf(f, L"# menubar: top menu bar   clock_date: show date in clock   clock_seconds: show seconds\n");
@@ -711,8 +715,8 @@ static void SaveIni() {
              S.theme, S.opacity, S.tooltips ? 1 : 0, S.attention ? 1 : 0, S.clickMinimize ? 1 : 0, S.hideFullscreen ? 1 : 0);
     fwprintf(f, L"menubar=%d\nclock_date=%d\nclock_seconds=%d\ntray_icons=%d\n", S.showMenubar ? 1 : 0, S.clockDate ? 1 : 0,
              S.clockSeconds ? 1 : 0, S.trayIcons ? 1 : 0);
-    fwprintf(f, L"indicator_style=%d\nminimized_previews=%d\nseparate_apps=%d\nglass_saturation=%d\n", S.indicatorStyle,
-             S.minimizedPreviews ? 1 : 0, S.separateApps ? 1 : 0, S.glassSaturation);
+    fwprintf(f, L"indicator_style=%d\nminimized_previews=%d\nseparate_apps=%d\nglass_saturation=%d\nglass_style=%d\n", S.indicatorStyle,
+             S.minimizedPreviews ? 1 : 0, S.separateApps ? 1 : 0, S.glassSaturation, S.glassStyle);
     fwprintf(f, L"show_launcher=%d\nshow_running=%d\nshow_trash=%d\n\n", S.showLauncher ? 1 : 0, S.showRunning ? 1 : 0, S.showTrash ? 1 : 0);
     {
         int n = 0;
@@ -782,6 +786,7 @@ static bool LoadIni() {
         else if (k == L"lock") S.locked = n != 0;
         else if (k == L"glass") S.glass = n != 0;
         else if (k == L"glass_saturation") S.glassSaturation = std::clamp(n, 100, 250);
+        else if (k == L"glass_style") S.glassStyle = std::clamp(n, 0, 1);
         else if (k == L"theme") S.theme = std::clamp(n, 0, 2);
         else if (k == L"opacity") S.opacity = std::clamp(n, 10, 100);
         else if (k == L"tooltips") S.tooltips = n != 0;
@@ -1370,8 +1375,13 @@ struct SaturationEffect : winrt::implements<SaturationEffect, winrt::Windows::Gr
     }
     HRESULT STDMETHODCALLTYPE GetSourceCount(UINT* c) noexcept override { *c = 1; return S_OK; }
 };
+static bool LightTheme();
 static void ApplyGlassBrush(Glass& gl) {
     if (!gl.comp || !gl.visual) return;
+    if (&gl == &g_glass && liquid::Active()) {
+        liquid::SetLook(LightTheme(), S.glassSaturation / 100.0f, g_scale);
+        return;
+    }
     auto backdrop = g_comp.CreateHostBackdropBrush();
     try {
         if (S.glassSaturation <= 100) { gl.visual.Brush(backdrop); return; }
@@ -1426,6 +1436,7 @@ static void FreeGlass(Glass& gl) {
     gl.geo = nullptr;
 }
 static void HideGlass(Glass& gl) {
+    if (&gl == &g_glass) liquid::Pause();
     if (gl.wnd && IsWindowVisible(gl.wnd)) ShowWindow(gl.wnd, SW_HIDE);
     gl.rc = RECT{};
 }
@@ -1448,9 +1459,38 @@ static void PlaceGlass(Glass& gl, HWND above, RECT r, float radius) {
     }
     SetWindowPos(gl.wnd, above, r.left, r.top, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
     gl.rc = r;
+    if (&gl == &g_glass && liquid::Active()) liquid::Place(r, std::max(0.0f, radius));
 }
 static void HideGlass() { HideGlass(g_glass); }
+
+// Liquid glass needs our own windows left out of screen capture, otherwise the dock would
+// refract itself. As a side effect the dock doesn't appear in screenshots while it is on.
+static bool g_liquidFailed = false;
+static void SetCaptureExclusion(bool on) {
+    for (HWND h : {g_hwnd, g_glass.wnd, g_barWnd, g_barGlass.wnd, g_dragWnd})
+        if (h) SetWindowDisplayAffinity(h, on ? WDA_EXCLUDEFROMCAPTURE : WDA_NONE);
+}
+static void SyncLiquid() {
+    bool want = S.glass && S.glassStyle == 1 && g_glass.comp && !g_liquidFailed;
+    if (want && !liquid::Active()) {
+        SetCaptureExclusion(true);
+        if (liquid::Start(g_glass.wnd, g_comp, g_glass.visual, g_scale, LightTheme(), S.glassSaturation / 100.0f, g_hwnd, WM_LIQUIDACCESS)) {
+            g_glass.rc = RECT{};
+        } else {
+            g_liquidFailed = true;
+            SetCaptureExclusion(false);
+            ApplyGlassBrush(g_glass);
+        }
+    } else if (!want && liquid::Active()) {
+        liquid::Stop();
+        SetCaptureExclusion(false);
+        ApplyGlassBrush(g_glass);
+        g_glass.rc = RECT{};
+    }
+    if (liquid::Active()) liquid::SetLook(LightTheme(), S.glassSaturation / 100.0f, g_scale);
+}
 static void UpdateGlass(RectF shelf, float radius) {
+    SyncLiquid();
     if (!S.glass || g_hiddenFS || !IsWindowVisible(g_hwnd)) { HideGlass(g_glass); return; }
     RECT r{g_X + (LONG)std::floor(shelf.X) + 1, g_Y + (LONG)std::floor(shelf.Y) + 1,
            g_X + (LONG)std::ceil(shelf.X + shelf.Width) - 1, g_Y + (LONG)std::ceil(shelf.Y + shelf.Height) - 1};
@@ -1526,17 +1566,18 @@ void Render() {
         }
         bool light = LightTheme();
         BYTE alpha = (BYTE)std::clamp(S.opacity * 255 / 100, 10, 255);
+        bool liquidOn = S.glass && liquid::Active();
         GraphicsPath shelf;
         RoundRectPath(shelf, Rc(left, right, c0, cShelf), g.radius);
         SolidBrush sb(light ? Color(alpha, 246, 246, 248) : Color(alpha, 28, 28, 34));
-        gr.FillPath(&sb, &shelf);
+        if (!liquidOn) gr.FillPath(&sb, &shelf);
         RectF shelfR = Rc(left, right, c0, cShelf);
         LinearGradientBrush rim(PointF(0, shelfR.Y - 1), PointF(0, shelfR.GetBottom() + 1),
                                 light ? Color(220, 255, 255, 255) : Color(135, 255, 255, 255),
                                 light ? Color(55, 0, 0, 0) : Color(28, 255, 255, 255));
         Pen border(light ? Color(60, 0, 0, 0) : Color(70, 255, 255, 255), 1.0f * s);
         Pen rimPen(&rim, 1.0f * s);
-        gr.DrawPath(S.glass ? &rimPen : &border, &shelf);
+        if (!liquidOn) gr.DrawPath(S.glass ? &rimPen : &border, &shelf);
 
         ULONGLONG now = GetTickCount64();
         int hov = (S.tooltips && g_tracking && !g_dragging && g_hover > 0.5f) ? HitTest(g_mx) : -1;
@@ -1918,7 +1959,7 @@ static HMENU BuildDockMenu() {
 
     auto chk = [](bool b) -> UINT { return MF_STRING | (b ? MF_CHECKED : 0); };
     HMENU look = CreatePopupMenu();
-    AppendMenuW(look, chk(S.glass), ID_GLASS, L"Frosted glass background");
+    AppendMenuW(look, chk(S.glass), ID_GLASS, L"Glass background");
     AppendMenuW(look, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(look, MF_STRING | MF_GRAYED, 0, L"Color");
     for (int i = 0; i < 3; i++) AppendMenuW(look, chk(S.theme == i), ID_THEME0 + i, kThemeNames[i]);
@@ -2090,6 +2131,14 @@ static void DockCommand(int cmd) {
     }
     case ID_LOCK: S.locked = !S.locked; SaveIni(); break;
     case ID_GLASS: S.glass = !S.glass; SaveIni(); g_glass.rc = g_barGlass.rc = RECT{}; Render(); RenderBar(); break;
+    case ID_GLASSSTYLE0:
+    case ID_GLASSSTYLE0 + 1:
+        S.glassStyle = cmd - ID_GLASSSTYLE0;
+        g_liquidFailed = false;
+        SaveIni();
+        Render();
+        Render();
+        break;
     case ID_TIPS: S.tooltips = !S.tooltips; SaveIni(); break;
     case ID_BAR: S.showMenubar = !S.showMenubar; SaveIni(); ApplyShell(); TrayEnable(S.showMenubar && S.trayIcons); RenderBar(); break;
     case ID_BARTRAY: S.trayIcons = !S.trayIcons; SaveIni(); TrayEnable(S.showMenubar && S.trayIcons); RenderBar(); break;
@@ -3128,7 +3177,10 @@ static void BuildSettingsPage() {
         break;
     case 1:
         Heading(L"Background");
-        Toggle(L"Frosted glass", L"Blurs the desktop behind the dock and the menu bar", [] { return S.glass; }, ID_GLASS);
+        Toggle(L"Glass background", L"Blurs the desktop behind the dock and the menu bar", [] { return S.glass; }, ID_GLASS);
+        Segment(L"Dock glass", L"Liquid bends the desktop at the edges. The dock is left out of screenshots while it's on",
+                {L"Frosted", L"Liquid (beta)"}, [] { return S.glassStyle; }, [](int i) { DockCommand(ID_GLASSSTYLE0 + i); })
+            .enabled = [] { return S.glass; };
         Slider(L"Color vibrancy", L"Colors behind the glass", 100, 250, L" %", [] { return S.glassSaturation; },
                [](int v) { S.glassSaturation = v; ApplyGlassBrush(g_glass); ApplyGlassBrush(g_barGlass); }, [](int) { SaveIni(); })
             .enabled = [] { return S.glass; };
@@ -3650,6 +3702,10 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         OpenSettings();
         return 0;
     }
+    if (m == WM_LIQUIDACCESS) {
+        liquid::OnAccessReady();
+        return 0;
+    }
     switch (m) {
     case WM_TIMER:
         if (w == T_ANIM) Tick();
@@ -3942,6 +3998,7 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, PWSTR cmdLine, int) {
     delete g_barBold;
     delete g_iconFont;
     GdiplusShutdown(gtok);
+    liquid::Stop();
     FreeGlass(g_glass);
     FreeGlass(g_barGlass);
     g_comp = nullptr;
