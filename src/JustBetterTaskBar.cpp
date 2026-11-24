@@ -63,6 +63,7 @@ using std::max;
 #pragma comment(linker, "\"/manifestdependency:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
 using namespace Gdiplus;
+namespace liquid { inline void NoteOwnChange(); }
 
 static const GUID kAppsFolder = {0x1e87508d, 0x89c2, 0x42f0, {0x8a, 0x7e, 0x64, 0x5a, 0x0f, 0x50, 0xca, 0x58}};
 static const GUID kDownloads = {0x374de290, 0x123f, 0x4565, {0x91, 0x64, 0x39, 0xc4, 0x92, 0x5e, 0x46, 0x7b}};
@@ -146,6 +147,7 @@ struct Surface {
     }
     void Clear() { memset(bits, 0, (size_t)w * h * 4); }
     void Present(HWND hw, int x, int y) {
+        liquid::NoteOwnChange();
         POINT dst{x, y}, src{0, 0};
         SIZE sz{w, h};
         BLENDFUNCTION bf{AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
@@ -1467,8 +1469,10 @@ static void HideGlass() { HideGlass(g_glass); }
 // refract itself. As a side effect the dock doesn't appear in screenshots while it is on.
 static bool g_liquidFailed = false;
 static void SetCaptureExclusion(bool on) {
-    for (HWND h : {g_hwnd, g_glass.wnd, g_barWnd, g_barGlass.wnd, g_dragWnd})
+    std::vector<HWND> own{g_hwnd, g_glass.wnd, g_barWnd, g_barGlass.wnd, g_dragWnd};
+    for (HWND h : own)
         if (h) SetWindowDisplayAffinity(h, on ? WDA_EXCLUDEFROMCAPTURE : WDA_NONE);
+    if (on) liquid::SetOwnWindows(own);
 }
 static void SyncLiquid() {
     bool want = S.glass && S.glassStyle >= 1 && g_glass.comp && !g_liquidFailed;
@@ -2251,6 +2255,7 @@ static bool ForegroundIsFullscreen() {
 }
 static void Poll() {
     g_pollCount++;
+    liquid::NoteOwnChange();
     ApplyShell();
     bool fs = S.hideFullscreen && ForegroundIsFullscreen();
     if (fs != g_hiddenFS) {
