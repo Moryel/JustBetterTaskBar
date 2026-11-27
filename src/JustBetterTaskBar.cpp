@@ -166,7 +166,7 @@ struct Surface {
     }
 };
 
-enum { T_ANIM = 1, T_REFRESH = 2, T_POLL = 3, T_SIZE = 4, T_EDGE = 5, T_DRAG = 6, T_UPDATE = 7, T_TAKEOVER = 8 };
+enum { T_ANIM = 1, T_REFRESH = 2, T_POLL = 3, T_SIZE = 4, T_EDGE = 5, T_DRAG = 6, T_UPDATE = 7, T_TAKEOVER = 8, T_FULLSCREEN = 9 };
 enum {
     ID_QUIT = 1, ID_HIDETB, ID_RESERVE, ID_AUTOSTART, ID_EDITINI, ID_RELOAD,
     ID_SIZE0 = 10, ID_MAG0 = 20, ID_EMPTYTRASH = 30, ID_OPENTRASH, ID_POS0 = 40,
@@ -2314,7 +2314,7 @@ static bool ForegroundIsFullscreen() {
     QUERY_USER_NOTIFICATION_STATE st;
     if (SUCCEEDED(SHQueryUserNotificationState(&st)) && (st == QUNS_RUNNING_D3D_FULL_SCREEN || st == QUNS_PRESENTATION_MODE)) return true;
     HWND fg = GetForegroundWindow();
-    if (!fg || fg == g_hwnd || IsZoomed(fg)) return false;
+    if (!fg || fg == g_hwnd) return false;
     wchar_t cls[64] = {};
     GetClassNameW(fg, cls, 64);
     if (!wcscmp(cls, L"Progman") || !wcscmp(cls, L"WorkerW")) return false;
@@ -2322,20 +2322,27 @@ static bool ForegroundIsFullscreen() {
     if (!GetMonitorInfoW(MonitorFromWindow(fg, MONITOR_DEFAULTTONULL), &mi) || !EqualRect(&mi.rcMonitor, &pm.rcMonitor)) return false;
     RECT r;
     GetWindowRect(fg, &r);
-    return r.left <= mi.rcMonitor.left && r.top <= mi.rcMonitor.top && r.right >= mi.rcMonitor.right && r.bottom >= mi.rcMonitor.bottom;
+    if (r.left > mi.rcMonitor.left || r.top > mi.rcMonitor.top || r.right < mi.rcMonitor.right || r.bottom < mi.rcMonitor.bottom) return false;
+    // Browsers keep their window maximized and drop the frame for full-screen video, so being
+    // maximized doesn't rule it out; a maximized window that still has a title bar is just big.
+    if (IsZoomed(fg) && (GetWindowLongW(fg, GWL_STYLE) & WS_CAPTION) == WS_CAPTION) return false;
+    return true;
+}
+static void CheckFullscreen() {
+    bool fs = S.hideFullscreen && ForegroundIsFullscreen();
+    if (fs == g_hiddenFS) return;
+    g_hiddenFS = fs;
+    ShowWindow(g_hwnd, fs ? SW_HIDE : SW_SHOWNOACTIVATE);
+    if (fs) HideGlass();
+    else Render();
+    RenderBar();
 }
 static void Poll() {
     g_pollCount++;
     liquid::NoteOwnChange();
     ApplyShell();
-    bool fs = S.hideFullscreen && ForegroundIsFullscreen();
-    if (fs != g_hiddenFS) {
-        g_hiddenFS = fs;
-        ShowWindow(g_hwnd, fs ? SW_HIDE : SW_SHOWNOACTIVATE);
-        if (fs) HideGlass();
-        else Render();
-        RenderBar();
-    }
+    CheckFullscreen();
+    bool fs = g_hiddenFS;
     BarPoll();
     if (!fs && !g_dragging) {
         SetWindowPos(g_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
@@ -3988,6 +3995,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         else if (w == T_SIZE) { KillTimer(h, T_SIZE); ApplySettingsChange(); }
         else if (w == T_EDGE) EdgeTick();
         else if (w == T_DRAG) DragPoll();
+        else if (w == T_FULLSCREEN) CheckFullscreen();
         else if (w == T_UPDATE) { KillTimer(h, T_UPDATE); update::Check(g_hwnd, WM_UPDATE, true); }
         else if (w == T_TAKEOVER) {
             // Explorer re-shows its (auto-hidden) taskbar for a moment after the old instance leaves
@@ -4298,6 +4306,7 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, PWSTR cmdLine, int) {
     TrayEnable(S.showMenubar && S.trayIcons);
     RenderBar();
     SetTimer(g_hwnd, T_POLL, 1000, nullptr);
+    SetTimer(g_hwnd, T_FULLSCREEN, 250, nullptr);   // full-screen video should hide the dock quickly
     if (S.updateCheck && !takeover) SetTimer(g_hwnd, T_UPDATE, 15000, nullptr);
     if (takeover) SetTimer(g_hwnd, T_TAKEOVER, 100, nullptr);
     if (wantSettings) OpenSettings();
