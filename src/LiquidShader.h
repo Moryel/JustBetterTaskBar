@@ -10,7 +10,8 @@ cbuffer C : register(b0) {
     float2 size; float2 offs;
     float2 tex; float radius; float scale;
     float sat; float refr; float edge; float spacing;
-    float lod; float light; float mode; float unused;
+    float lod; float light; float mode; float nearTint;
+    float2 inward; float nearDist; float unused;
 };
 Texture2D src : register(t0);
 SamplerState smp : register(s0);
@@ -34,6 +35,12 @@ float3 blurAt(float2 px) {
     }
     return c / w;
 }
+// Color of whatever lies right next to the dock on the screen side (usually the open window).
+float3 nearColor(float2 pos) {
+    float2 far = float2(inward.x > 0.5 ? size.x : (inward.x < -0.5 ? 0 : pos.x),
+                        inward.y > 0.5 ? size.y : (inward.y < -0.5 ? 0 : pos.y));
+    return src.SampleLevel(smp, (offs + far + inward * nearDist) / tex, 4).rgb;
+}
 float4 PS(float4 pos : SV_Position) : SV_Target {
     float2 h = size * 0.5;
     float2 p = pos.xy - h;
@@ -51,7 +58,7 @@ float4 PS(float4 pos : SV_Position) : SV_Target {
         float tc = saturate(1 - depth / edge);
         float2 q = offs + pos.xy + n * refr * tc * tc * tc;
         float3 cc = src.SampleLevel(smp, q / tex, 0).rgb;
-        float3 avg = src.SampleLevel(smp, (offs + pos.xy) / tex, 4).rgb;
+        float3 avg = nearTint > 0.5 ? nearColor(pos.xy) : src.SampleLevel(smp, (offs + pos.xy) / tex, 4).rgb;
         float3 veil = light > 0.5 ? lerp(0.90.xxx, avg, 0.2) : float3(0.006, 0.012, 0.056) + avg * 0.568;
         cc = cc * 0.69 + veil * 0.31;
         float up = max(-n.y, 0), dn = max(n.y, 0);
@@ -70,6 +77,7 @@ float4 PS(float4 pos : SV_Position) : SV_Target {
     float l = dot(c, float3(0.2126, 0.7152, 0.0722));
     c = lerp(l.xxx, c, sat);
     c = light > 0.5 ? c * 0.86 + 0.20 : c * 0.62 + 0.035;
+    if (nearTint > 0.5) c = lerp(c, nearColor(pos.xy) * (light > 0.5 ? 1.0 : 0.7), 0.35);
 
     // rim: a faint dark outline, a bright specular line just inside it, and a soft inner glow
     float facing = abs(dot(n, normalize(float2(-0.35, -1))));
@@ -87,12 +95,14 @@ struct CB {
     float size[2], offs[2];
     float tex[2], radius, scale;
     float sat, refr, edge, spacing;
-    float lod, light, mode, unused;
+    float lod, light, mode, nearTint;
+    float inward[2], nearDist, unused;
 };
 
 // w, h: glass size; ox, oy: glass top-left inside the backdrop texture; tw, th: backdrop size.
 // mode 0: frosted liquid glass, mode 1: clear (fitted to macOS 27)
-inline CB MakeCB(int w, int h, float ox, float oy, int tw, int th, float radius, float scale, bool light, float sat, int mode = 0) {
+inline CB MakeCB(int w, int h, float ox, float oy, int tw, int th, float radius, float scale, bool light, float sat, int mode = 0,
+                 float inX = 0, float inY = -1, bool nearTint = false) {
     CB c{};
     c.size[0] = (float)w;
     c.size[1] = (float)h;
@@ -109,6 +119,11 @@ inline CB MakeCB(int w, int h, float ox, float oy, int tw, int th, float radius,
     c.spacing = std::exp2(c.lod) * 0.75f;
     c.light = light ? 1.0f : 0.0f;
     c.mode = (float)mode;
+    // inward: unit vector from the screen edge towards the screen's middle
+    c.nearTint = nearTint ? 1.0f : 0.0f;
+    c.inward[0] = inX;
+    c.inward[1] = inY;
+    c.nearDist = 18 * scale + 8;
     if (mode == 1) {
         float t = (float)std::min(w, h);
         c.edge = 0.29f * t;

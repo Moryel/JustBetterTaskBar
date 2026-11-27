@@ -54,6 +54,8 @@ struct State {
     RECT bandRc{};
     float radius = 0, scale = 1, sat = 1.8f;
     int mode = 0;
+    bool nearTint = false;
+    float inX = 0, inY = -1;   // from the dock's screen edge towards the middle of the screen
     std::vector<HWND> ownWnds;
     bool light = false;
     HWND notify = nullptr;
@@ -84,7 +86,8 @@ static void RenderLocked() {
     if (FAILED(g.dev->CreateRenderTargetView(bb.get(), nullptr, rtv.put()))) return;
 
     CB c = MakeCB(w, h, (float)(g.rc.left - g.monRc.left - g.bandRc.left), (float)(g.rc.top - g.monRc.top - g.bandRc.top),
-                  g.bandRc.right - g.bandRc.left, g.bandRc.bottom - g.bandRc.top, g.radius, g.scale, g.light, g.sat, g.mode);
+                  g.bandRc.right - g.bandRc.left, g.bandRc.bottom - g.bandRc.top, g.radius, g.scale, g.light, g.sat, g.mode,
+                  g.inX, g.inY, g.nearTint);
     g.ctx->UpdateSubresource(g.cb.get(), 0, nullptr, &c, 0, 0);
 
     float clear[4] = {0, 0, 0, 0};
@@ -299,13 +302,13 @@ inline void Place(RECT rect, float radius) {
         if (horizontal) {
             r.left = 0;
             r.right = mw;
-            if ((r.top + r.bottom) / 2 > mh / 2) { r.bottom = mh; r.top -= 2 * h; }
-            else { r.top = 0; r.bottom += 2 * h; }
+            if ((r.top + r.bottom) / 2 > mh / 2) { r.bottom = mh; r.top -= 2 * h; g.inX = 0; g.inY = -1; }
+            else { r.top = 0; r.bottom += 2 * h; g.inX = 0; g.inY = 1; }
         } else {
             r.top = 0;
             r.bottom = mh;
-            if ((r.left + r.right) / 2 < mw / 2) { r.left = 0; r.right += 2 * w; }
-            else { r.right = mw; r.left -= 2 * w; }
+            if ((r.left + r.right) / 2 < mw / 2) { r.left = 0; r.right += 2 * w; g.inX = 1; g.inY = 0; }
+            else { r.right = mw; r.left -= 2 * w; g.inX = -1; g.inY = 0; }
         }
         r.left = std::max<LONG>(r.left, 0);
         r.top = std::max<LONG>(r.top, 0);
@@ -328,11 +331,12 @@ inline void SetOwnWindows(std::vector<HWND> wnds) {
     g.ownWnds = std::move(wnds);
 }
 
-inline void SetLook(bool light, float sat, float scale, int mode) {
+inline void SetLook(bool light, float sat, float scale, int mode, bool nearTint) {
     if (!g.active) return;
     std::lock_guard<std::mutex> lk(g.mtx);
-    if (light == g.light && sat == g.sat && scale == g.scale && mode == g.mode) return;
+    if (light == g.light && sat == g.sat && scale == g.scale && mode == g.mode && nearTint == g.nearTint) return;
     g.mode = mode;
+    g.nearTint = nearTint;
     g.light = light;
     g.sat = sat;
     g.scale = scale;

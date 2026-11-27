@@ -3,7 +3,8 @@
 ; Installs per user (no admin rights), so the app can keep dock.ini next to its executable.
 
 #define AppName "Just Better TaskBar"
-#define AppVersion "1.0.0"
+; the version comes from the built executable (src\version.h)
+#define AppVersion GetStringFileInfo(AddBackslash(SourcePath) + "..\src\JustBetterTaskBar.exe", "ProductVersion")
 #define AppExe "JustBetterTaskBar.exe"
 #define AppUrl "https://github.com/Moryel/JustBetterTaskBar"
 

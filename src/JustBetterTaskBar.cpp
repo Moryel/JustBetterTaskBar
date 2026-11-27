@@ -73,7 +73,8 @@ static const PROPERTYKEY kPKeyAumid = {{0x9F4C2855, 0x9F79, 0x4B39, {0xA8, 0xD0,
 struct Settings {
     int size = 50;
     int magnify = 85;
-    int position = 0;
+    int position = 0;   // 0 bottom, 1 left, 2 right, 3 top
+    int align = 1;      // along the edge: 0 start (left / top corner), 1 center, 2 end
     bool autohide = false;
     int hideDelay = 200;
     int hideAnim = 300;
@@ -88,6 +89,8 @@ struct Settings {
     bool glass = true;
     int glassSaturation = 180;
     int glassStyle = 0;
+    bool tintWindows = false;   // liquid / clear glass takes its tint from the window next to the dock
+    bool updateCheck = true;    // look for a new version at startup
     int theme = 0;
     int opacity = 45;
     bool tooltips = true;
@@ -163,7 +166,7 @@ struct Surface {
     }
 };
 
-enum { T_ANIM = 1, T_REFRESH = 2, T_POLL = 3, T_SIZE = 4, T_EDGE = 5, T_DRAG = 6 };
+enum { T_ANIM = 1, T_REFRESH = 2, T_POLL = 3, T_SIZE = 4, T_EDGE = 5, T_DRAG = 6, T_UPDATE = 7, T_TAKEOVER = 8 };
 enum {
     ID_QUIT = 1, ID_HIDETB, ID_RESERVE, ID_AUTOSTART, ID_EDITINI, ID_RELOAD,
     ID_SIZE0 = 10, ID_MAG0 = 20, ID_EMPTYTRASH = 30, ID_OPENTRASH, ID_POS0 = 40,
@@ -171,13 +174,13 @@ enum {
     ID_REMOVE, ID_STACKOPEN, ID_FOLDEROPEN,
     ID_GLASS = 70, ID_THEME0 = 71, ID_OPAC0 = 74, ID_TIPS = 80, ID_ATTN, ID_CLICKMIN, ID_FULLHIDE,
     ID_SHOWLAUNCH, ID_SHOWRUN, ID_SHOWTRASH, ID_DOWNLOADS, ID_BAR = 95, ID_BARDATE, ID_BARSEC, ID_BARTRAY, ID_OPENSETTINGS,
-    ID_OPEN = 100, ID_PIN, ID_CLOSEALL, ID_INDSTYLE0 = 120, ID_MINSTYLE0 = 125, ID_MINPREV = 128, ID_SEPAPPS = 129, ID_HIDEAPP = 130, ID_GLASSSTYLE0 = 131, ID_WIN0 = 200, ID_FILE0 = 300
+    ID_OPEN = 100, ID_PIN, ID_CLOSEALL, ID_INDSTYLE0 = 120, ID_MINSTYLE0 = 125, ID_MINPREV = 128, ID_SEPAPPS = 129, ID_HIDEAPP = 130, ID_GLASSSTYLE0 = 131, ID_TINTWIN = 136, ID_UPDCHECK, ID_UPDATE, ID_WIN0 = 200, ID_FILE0 = 300
 };
 static const int kSizes[4] = {40, 50, 64, 80};
 static const wchar_t* kSizeNames[4] = {L"Small", L"Medium", L"Large", L"Extra large"};
 static const int kMags[6] = {0, 30, 60, 85, 110, 140};
 static const wchar_t* kMagNames[6] = {L"Off", L"Very low", L"Low", L"Medium", L"High", L"Maximum"};
-static const wchar_t* kPosNames[3] = {L"Bottom", L"Left", L"Right"};
+static const wchar_t* kPosNames[4] = {L"Bottom", L"Left", L"Right", L"Top"};
 static const int kDelays[4] = {0, 200, 500, 1000};
 static const wchar_t* kDelayNames[4] = {L"No delay", L"Short (0.2 s)", L"Medium (0.5 s)", L"Long (1 s)"};
 static const int kAnims[4] = {0, 150, 300, 600};
@@ -188,9 +191,12 @@ static const wchar_t* kOpacNames[4] = {L"Very transparent", L"Transparent", L"Sl
 static const float kPeriod = 0.6f;
 const UINT WM_APPBAR = WM_APP + 1;
 const UINT WM_LIQUIDACCESS = WM_APP + 6;
+const UINT WM_HANDOVER = WM_APP + 7;   // sent by a newer instance that is taking over
+const UINT WM_UPDATE = WM_APP + 8;     // an update check or install finished
 
 namespace wuc = winrt::Windows::UI::Composition;
 #include "LiquidGlass.h"
+#include "Update.h"
 struct Glass {
     HWND wnd = nullptr;
     RECT rc{};
@@ -248,6 +254,7 @@ int g_pressIdx = -1, g_pollCount = 0, g_spacerSeq = 0;
 ULONGLONG g_lastTick = 0, g_edgeSince = 0, g_leaveSince = 0;
 UINT g_shellMsg = 0, g_taskbarCreatedMsg = 0;
 bool g_appbar = false, g_cleaned = false, g_menuOpen = false;
+bool g_handover = false;   // quitting for a newer version: leave the Windows taskbar hidden
 RECT g_abRect{}, g_shelfScreen{};
 std::wstring g_sig, g_iniPath, g_exePath;
 Font* g_font = nullptr;
@@ -302,7 +309,7 @@ static void RoundRectPath(GraphicsPath& p, RectF r, float rad) {
     p.AddArc(r.X, r.Y + r.Height - d, d, d, 90, 90);
     p.CloseFigure();
 }
-static bool Horizontal() { return S.position == 0; }
+static bool Horizontal() { return S.position == 0 || S.position == 3; }
 
 static Geo G() {
     float s = g_scale;
@@ -326,6 +333,7 @@ static int IconPx() { return (int)std::ceil(G().maxZ); }
 static RectF Rc(float m0, float m1, float c0, float c1) {
     switch (S.position) {
     case 0: return RectF(m0, g_H - c1, m1 - m0, c1 - c0);
+    case 3: return RectF(m0, c0, m1 - m0, c1 - c0);
     case 1: return RectF(c0, m0, c1 - c0, m1 - m0);
     default: return RectF(g_W - c1, m0, c1 - c0, m1 - m0);
     }
@@ -333,6 +341,7 @@ static RectF Rc(float m0, float m1, float c0, float c1) {
 static PointF Pt(float m, float c) {
     switch (S.position) {
     case 0: return PointF(m, g_H - c);
+    case 3: return PointF(m, c);
     case 1: return PointF(c, m);
     default: return PointF(g_W - c, m);
     }
@@ -582,7 +591,32 @@ static Bitmap* MakeLauncherIcon(int sz) {
     }
     return b;
 }
+// Apps that ship only small icons come back as a small icon in the top-left corner of a big
+// transparent canvas (any size, not only 32 px in 256). Cut the canvas down to the icon itself.
+static Bitmap* CropCornerIcon(Bitmap* b) {
+    int w = b->GetWidth(), h = b->GetHeight();
+    if (w < 64 || h < 64) return b;
+    BitmapData bd;
+    Rect r(0, 0, w, h);
+    if (b->LockBits(&r, ImageLockModeRead, PixelFormat32bppARGB, &bd) != Ok) return b;
+    int l = w, t = h, rr = -1, bb = -1;
+    for (int y = 0; y < h; y++) {
+        DWORD* row = (DWORD*)((BYTE*)bd.Scan0 + y * bd.Stride);
+        for (int x = 0; x < w; x++)
+            if ((row[x] >> 24) > 8) { l = std::min(l, x); t = std::min(t, y); rr = std::max(rr, x); bb = std::max(bb, y); }
+    }
+    b->UnlockBits(&bd);
+    if (rr < 0) return b;
+    int side = std::max(rr, bb) + 1;
+    bool corner = l < w / 8 && t < h / 8 && side <= w * 3 / 4 && side <= h * 3 / 4;
+    if (!corner) return b;
+    Bitmap* c = b->Clone(0, 0, side, side, PixelFormat32bppARGB);
+    if (!c || c->GetLastStatus() != Ok) { delete c; return b; }
+    delete b;
+    return c;
+}
 static Bitmap* CacheIcon(const std::wstring& ck, Bitmap* raw) {
+    if (raw) raw = CropCornerIcon(raw);
     Bitmap* sc = raw ? ScaleTo(raw, IconPx()) : nullptr;
     delete raw;
     g_icons[ck] = sc;
@@ -693,7 +727,7 @@ static void SaveIni() {
     if (!f) return;
     fwprintf(f, L"# Just Better TaskBar settings — after editing, right-click the dock and choose \"Reload settings\".\n");
     fwprintf(f, L"# size: icon size (24-128)          magnify: magnification percent (0 = off, max 150)\n");
-    fwprintf(f, L"# position: 0 bottom, 1 left, 2 right   autohide: auto-hide (1/0)\n");
+    fwprintf(f, L"# position: 0 bottom, 1 left, 2 right, 3 top   align: 0 left/top corner, 1 center, 2 right/bottom corner   autohide: auto-hide (1/0)\n");
     fwprintf(f, L"# autohide_delay: show delay in ms   autohide_anim: slide duration in ms (0 = no animation)\n");
     fwprintf(f, L"# hide_taskbar: hide the Windows taskbar   reserve: keep maximized windows above the dock\n");
     fwprintf(f, L"# indicators: running app indicators   bounce: bounce when an app opens\n");
@@ -709,16 +743,16 @@ static void SaveIni() {
     fwprintf(f, L"# tray_icons: show background app tray icons (Steam, Discord…) in the menu bar\n");
     fwprintf(f, L"# indicator_style: running app indicator 0 dot, 1 highlight, 2 blue line\n");
     fwprintf(f, L"# pin=<path>|<name>   (.exe, .lnk, folder = stack, shell:AppsFolder\\<AppID>, #spacer = spacer)   hide=<app> hides an app\n\n");
-    fwprintf(f, L"size=%d\nmagnify=%d\nposition=%d\nautohide=%d\nautohide_delay=%d\nautohide_anim=%d\n", S.size, S.magnify,
-             S.position, S.autohide ? 1 : 0, S.hideDelay, S.hideAnim);
+    fwprintf(f, L"size=%d\nmagnify=%d\nposition=%d\nalign=%d\nautohide=%d\nautohide_delay=%d\nautohide_anim=%d\n", S.size, S.magnify,
+             S.position, S.align, S.autohide ? 1 : 0, S.hideDelay, S.hideAnim);
     fwprintf(f, L"hide_taskbar=%d\nreserve=%d\nindicators=%d\nbounce=%d\nminimized_style=%d\nlock=%d\n\n", S.hideTaskbar ? 1 : 0,
              S.reserve ? 1 : 0, S.indicators ? 1 : 0, S.bounce ? 1 : 0, S.minimizedStyle, S.locked ? 1 : 0);
     fwprintf(f, L"glass=%d\ntheme=%d\nopacity=%d\ntooltips=%d\nattention=%d\nclick_minimize=%d\nhide_fullscreen=%d\n", S.glass ? 1 : 0,
              S.theme, S.opacity, S.tooltips ? 1 : 0, S.attention ? 1 : 0, S.clickMinimize ? 1 : 0, S.hideFullscreen ? 1 : 0);
     fwprintf(f, L"menubar=%d\nclock_date=%d\nclock_seconds=%d\ntray_icons=%d\n", S.showMenubar ? 1 : 0, S.clockDate ? 1 : 0,
              S.clockSeconds ? 1 : 0, S.trayIcons ? 1 : 0);
-    fwprintf(f, L"indicator_style=%d\nminimized_previews=%d\nseparate_apps=%d\nglass_saturation=%d\nglass_style=%d\n", S.indicatorStyle,
-             S.minimizedPreviews ? 1 : 0, S.separateApps ? 1 : 0, S.glassSaturation, S.glassStyle);
+    fwprintf(f, L"indicator_style=%d\nminimized_previews=%d\nseparate_apps=%d\nglass_saturation=%d\nglass_style=%d\ntint_windows=%d\nupdate_check=%d\n", S.indicatorStyle,
+             S.minimizedPreviews ? 1 : 0, S.separateApps ? 1 : 0, S.glassSaturation, S.glassStyle, S.tintWindows ? 1 : 0, S.updateCheck ? 1 : 0);
     fwprintf(f, L"show_launcher=%d\nshow_running=%d\nshow_trash=%d\n\n", S.showLauncher ? 1 : 0, S.showRunning ? 1 : 0, S.showTrash ? 1 : 0);
     {
         int n = 0;
@@ -761,7 +795,8 @@ static bool LoadIni() {
             static const int old[3] = {0, 45, 85};
             S.magnify = n <= 2 ? old[std::max(n, 0)] : std::clamp(n, 0, 150);
         }
-        else if (k == L"position") S.position = std::clamp(n, 0, 2);
+        else if (k == L"position") S.position = std::clamp(n, 0, 3);
+        else if (k == L"align") S.align = std::clamp(n, 0, 2);
         else if (k == L"autohide") S.autohide = n != 0;
         else if (k == L"autohide_delay") S.hideDelay = std::clamp(n, 0, 5000);
         else if (k == L"autohide_anim") S.hideAnim = std::clamp(n, 0, 3000);
@@ -789,6 +824,8 @@ static bool LoadIni() {
         else if (k == L"glass") S.glass = n != 0;
         else if (k == L"glass_saturation") S.glassSaturation = std::clamp(n, 100, 250);
         else if (k == L"glass_style") S.glassStyle = std::clamp(n, 0, 2);
+        else if (k == L"tint_windows") S.tintWindows = n != 0;
+        else if (k == L"update_check") S.updateCheck = n != 0;
         else if (k == L"theme") S.theme = std::clamp(n, 0, 2);
         else if (k == L"opacity") S.opacity = std::clamp(n, 10, 100);
         else if (k == L"tooltips") S.tooltips = n != 0;
@@ -858,13 +895,14 @@ static void AppBarSetPos() {
     if (!g_appbar) return;
     APPBARDATA abd{sizeof abd};
     abd.hWnd = g_hwnd;
-    abd.uEdge = S.position == 0 ? ABE_BOTTOM : S.position == 1 ? ABE_LEFT : ABE_RIGHT;
+    abd.uEdge = S.position == 0 ? ABE_BOTTOM : S.position == 1 ? ABE_LEFT : S.position == 2 ? ABE_RIGHT : ABE_TOP;
     MONITORINFO mi = PrimaryMon();
     int T = ReserveH();
     auto fit = [&](RECT& r) {
         if (S.position == 0) r.top = r.bottom - T;
         else if (S.position == 1) r.right = r.left + T;
-        else r.left = r.right - T;
+        else if (S.position == 2) r.left = r.right - T;
+        else r.bottom = r.top + T;
     };
     abd.rc = mi.rcMonitor;
     fit(abd.rc);
@@ -952,15 +990,17 @@ static void RestoreTaskbar() {
 }
 static void ApplyShell() {
     if (S.hideTaskbar) HideTaskbar();
-    AppBarRegister(S.reserve && !S.autohide);
+    // AppBars on the same edge stack in registration order, so the menu bar goes first and a
+    // dock on the top edge ends up below it
     BarAppBarRegister(S.showMenubar);
+    AppBarRegister(S.reserve && !S.autohide);
 }
 static void Cleanup() {
     if (g_cleaned) return;
     g_cleaned = true;
     AppBarRegister(false);
     BarAppBarRegister(false);
-    if (S.hideTaskbar) RestoreTaskbar();
+    if (S.hideTaskbar && !g_handover) RestoreTaskbar();
 }
 static LONG WINAPI CrashFilter(EXCEPTION_POINTERS*) {
     Cleanup();
@@ -975,10 +1015,12 @@ static void CALLBACK OnWinEvent(HWINEVENTHOOK, DWORD, HWND h, LONG idObj, LONG, 
 static RECT EdgeRect() {
     MONITORINFO mi = PrimaryMon();
     RECT r = S.hideTaskbar ? mi.rcMonitor : mi.rcWork;
+    if (S.showMenubar) r.top = std::max(r.top, mi.rcMonitor.top + BarH());
     if (g_appbar) {
         if (S.position == 0) r.bottom = g_abRect.bottom;
         else if (S.position == 1) r.left = g_abRect.left;
-        else r.right = g_abRect.right;
+        else if (S.position == 2) r.right = g_abRect.right;
+        else r.top = g_abRect.top;
     }
     return r;
 }
@@ -1241,7 +1283,10 @@ static void Layout() {
     if (Horizontal()) { g_W = (int)L; g_H = (int)C; }
     else { g_W = (int)C; g_H = (int)L; }
 
-    float baseLeft = extra;
+    // In a corner the resting shelf sits a margin away from the corner and all the room for
+    // magnification is on the far side, so the dock grows away from the corner.
+    float cornerGap = g.padX + g.margin;
+    float baseLeft = S.align == 0 ? cornerGap : S.align == 2 ? L - baseTotal - cornerGap : extra;
     float mx = g_mx < 0 ? baseLeft + baseTotal / 2 : g_mx;
     float R = g.base * 2.7f;
     float cum = 0, aTotal = 0;
@@ -1265,8 +1310,9 @@ static void Layout() {
         ac += aw[i];
     }
     float aLeft = mxc - anchor;
-    if (aTotal + 2 * g.padX >= L) aLeft = (L - aTotal) / 2;
-    else aLeft = std::clamp(aLeft, g.padX + 1, L - g.padX - 1 - aTotal);
+    float lowA = S.align == 0 ? cornerGap : g.padX + 1, highA = L - aTotal - (S.align == 2 ? cornerGap : g.padX + 1);
+    if (highA <= lowA) aLeft = S.align == 0 ? lowA : S.align == 2 ? highA : (L - aTotal) / 2;
+    else aLeft = std::clamp(aLeft, lowA, highA);
     float x = aLeft;
     for (size_t i = 0; i < n; i++) {
         g_items[i].x = x;
@@ -1276,12 +1322,18 @@ static void Layout() {
     }
     RECT e = EdgeRect();
     MONITORINFO mi = PrimaryMon();
-    int shift = (int)std::round((1 - Ease(g_show)) * (g.margin + g.shelf + 2));
-    int cx = (mi.rcMonitor.left + mi.rcMonitor.right) / 2, cy = (mi.rcMonitor.top + mi.rcMonitor.bottom) / 2;
+    // a hidden top dock also has to clear the menu bar, so it slides fully off the screen
+    float hideBy = g.margin + g.shelf + 2 + (S.position == 3 ? e.top - mi.rcMonitor.top : 0);
+    int shift = (int)std::round((1 - Ease(g_show)) * hideBy);
+    // along the edge: the menu bar's strip is left free for side docks
+    LONG lo = Horizontal() ? mi.rcMonitor.left : e.top, hi = Horizontal() ? mi.rcMonitor.right : mi.rcMonitor.bottom;
+    int len = Horizontal() ? g_W : g_H;
+    int along = S.align == 0 ? lo : S.align == 2 ? hi - len : (lo + hi) / 2 - len / 2;
     switch (S.position) {
-    case 0: g_X = cx - g_W / 2; g_Y = e.bottom - g_H + shift; break;
-    case 1: g_X = e.left - shift; g_Y = cy - g_H / 2; break;
-    default: g_X = e.right - g_W + shift; g_Y = cy - g_H / 2; break;
+    case 0: g_X = along; g_Y = e.bottom - g_H + shift; break;
+    case 3: g_X = along; g_Y = e.top - shift; break;
+    case 1: g_X = e.left - shift; g_Y = along; break;
+    default: g_X = e.right - g_W + shift; g_Y = along; break;
     }
 }
 static int HitTest(float m) {
@@ -1381,7 +1433,7 @@ static bool LightTheme();
 static void ApplyGlassBrush(Glass& gl) {
     if (!gl.comp || !gl.visual) return;
     if (&gl == &g_glass && liquid::Active()) {
-        liquid::SetLook(LightTheme(), S.glassSaturation / 100.0f, g_scale, S.glassStyle - 1);
+        liquid::SetLook(LightTheme(), S.glassSaturation / 100.0f, g_scale, S.glassStyle - 1, S.tintWindows);
         return;
     }
     auto backdrop = g_comp.CreateHostBackdropBrush();
@@ -1491,7 +1543,7 @@ static void SyncLiquid() {
         ApplyGlassBrush(g_glass);
         g_glass.rc = RECT{};
     }
-    if (liquid::Active()) liquid::SetLook(LightTheme(), S.glassSaturation / 100.0f, g_scale, S.glassStyle - 1);
+    if (liquid::Active()) liquid::SetLook(LightTheme(), S.glassSaturation / 100.0f, g_scale, S.glassStyle - 1, S.tintWindows);
 }
 static void UpdateGlass(RectF shelf, float radius) {
     SyncLiquid();
@@ -1647,9 +1699,9 @@ void Render() {
             auto& it = g_items[hov];
             SizeF ts = TooltipSize(gr, it.name);
             float anchorC = iconBase + it.size + 10 * s, mc = it.x + it.w / 2, tx, ty;
-            if (S.position == 0) {
+            if (S.position == 0 || S.position == 3) {
                 tx = std::clamp(mc - ts.Width / 2, 2.0f, g_W - ts.Width - 2);
-                ty = std::max(1.0f, g_H - anchorC - ts.Height);
+                ty = S.position == 0 ? std::max(1.0f, g_H - anchorC - ts.Height) : std::min(g_H - ts.Height - 1, anchorC);
             } else {
                 ty = std::clamp(mc - ts.Height / 2, 2.0f, g_H - ts.Height - 2);
                 tx = S.position == 1 ? anchorC : g_W - anchorC - ts.Width;
@@ -1751,6 +1803,7 @@ static void EdgeTick() {
     MONITORINFO mi = PrimaryMon();
     bool atEdge;
     if (S.position == 0) atEdge = p.y >= e.bottom - 2 && p.y <= e.bottom + 1 && p.x >= mi.rcMonitor.left && p.x < mi.rcMonitor.right;
+    else if (S.position == 3) atEdge = p.y <= e.top + 1 && p.y >= e.top - 1 && p.x >= mi.rcMonitor.left && p.x < mi.rcMonitor.right;
     else if (S.position == 1) atEdge = p.x <= e.left + 1 && p.x >= e.left - 1 && p.y >= mi.rcMonitor.top && p.y < mi.rcMonitor.bottom;
     else atEdge = p.x >= e.right - 2 && p.x <= e.right + 1 && p.y >= mi.rcMonitor.top && p.y < mi.rcMonitor.bottom;
     bool over = g_tracking || g_resizing || g_dragging || g_menuOpen || g_down || (g_show > 0.5f && PtInRect(&g_shelfScreen, p));
@@ -1829,6 +1882,7 @@ static void MenuAnchor(int idx, POINT& pt, UINT& flags) {
     PointF p = Pt(it.x + it.w / 2, g.margin + g.shelf + 6 * g_scale);
     pt = POINT{g_X + (LONG)p.X, g_Y + (LONG)p.Y};
     flags = S.position == 0 ? (TPM_BOTTOMALIGN | TPM_CENTERALIGN)
+          : S.position == 3 ? (TPM_TOPALIGN | TPM_CENTERALIGN)
           : S.position == 1 ? (TPM_LEFTALIGN | TPM_VCENTERALIGN) : (TPM_RIGHTALIGN | TPM_VCENTERALIGN);
 }
 static int RunMenu(HMENU m, int idx) {
@@ -1954,7 +2008,7 @@ static HMENU BuildDockMenu() {
     wchar_t cur[64];
     swprintf(cur, 64, L"Current: %%%d   (Ctrl + Shift + wheel)", S.magnify);
     AppendMenuW(mg, MF_STRING | MF_GRAYED, 0, cur);
-    for (int i = 0; i < 3; i++) AppendMenuW(ps, MF_STRING | (S.position == i ? MF_CHECKED : 0), ID_POS0 + i, kPosNames[i]);
+    for (int i = 0; i < 4; i++) AppendMenuW(ps, MF_STRING | (S.position == i ? MF_CHECKED : 0), ID_POS0 + i, kPosNames[i]);
     AppendMenuW(hd, MF_STRING | MF_GRAYED, 0, L"Delay before showing");
     for (int i = 0; i < 4; i++) AppendMenuW(hd, MF_STRING | (S.hideDelay == kDelays[i] ? MF_CHECKED : 0), ID_DELAY0 + i, kDelayNames[i]);
     AppendMenuW(hd, MF_SEPARATOR, 0, nullptr);
@@ -2111,7 +2165,7 @@ static void DockCommand(int cmd) {
     if (cmd == ID_SEPAPPS) { S.separateApps = !S.separateApps; Refresh(true); SaveIni(); return; }
     if (cmd >= ID_SIZE0 && cmd < ID_SIZE0 + 4) { S.size = kSizes[cmd - ID_SIZE0]; ApplySettingsChange(); return; }
     if (cmd >= ID_MAG0 && cmd < ID_MAG0 + 6) { S.magnify = kMags[cmd - ID_MAG0]; ApplySettingsChange(); return; }
-    if (cmd >= ID_POS0 && cmd < ID_POS0 + 3) { S.position = cmd - ID_POS0; g_mx = -1; ApplySettingsChange(); return; }
+    if (cmd >= ID_POS0 && cmd < ID_POS0 + 4) { S.position = cmd - ID_POS0; g_mx = -1; ApplySettingsChange(); return; }
     if (cmd >= ID_DELAY0 && cmd < ID_DELAY0 + 4) { S.hideDelay = kDelays[cmd - ID_DELAY0]; SaveIni(); return; }
     if (cmd >= ID_ANIM0 && cmd < ID_ANIM0 + 4) { S.hideAnim = kAnims[cmd - ID_ANIM0]; SaveIni(); return; }
     if (cmd >= ID_THEME0 && cmd < ID_THEME0 + 3) { S.theme = cmd - ID_THEME0; SaveIni(); Render(); RenderBar(); return; }
@@ -2135,6 +2189,8 @@ static void DockCommand(int cmd) {
     }
     case ID_LOCK: S.locked = !S.locked; SaveIni(); break;
     case ID_GLASS: S.glass = !S.glass; SaveIni(); g_glass.rc = g_barGlass.rc = RECT{}; Render(); RenderBar(); break;
+    case ID_TINTWIN: S.tintWindows = !S.tintWindows; SaveIni(); Render(); break;
+    case ID_UPDCHECK: S.updateCheck = !S.updateCheck; SaveIni(); break;
     case ID_GLASSSTYLE0:
     case ID_GLASSSTYLE0 + 1:
     case ID_GLASSSTYLE0 + 2:
@@ -2145,7 +2201,15 @@ static void DockCommand(int cmd) {
         Render();
         break;
     case ID_TIPS: S.tooltips = !S.tooltips; SaveIni(); break;
-    case ID_BAR: S.showMenubar = !S.showMenubar; SaveIni(); ApplyShell(); TrayEnable(S.showMenubar && S.trayIcons); RenderBar(); break;
+    case ID_BAR:
+        S.showMenubar = !S.showMenubar;
+        SaveIni();
+        if (S.position == 3) AppBarRegister(false);  // re-register so a top dock stays below the bar
+        ApplyShell();
+        TrayEnable(S.showMenubar && S.trayIcons);
+        RenderBar();
+        Refresh(true);
+        break;
     case ID_BARTRAY: S.trayIcons = !S.trayIcons; SaveIni(); TrayEnable(S.showMenubar && S.trayIcons); RenderBar(); break;
     case ID_BARDATE: S.clockDate = !S.clockDate; SaveIni(); g_clockText = ClockText(); RenderBar(); break;
     case ID_BARSEC: S.clockSeconds = !S.clockSeconds; SaveIni(); g_clockText = ClockText(); RenderBar(); break;
@@ -2344,7 +2408,8 @@ static void DragMove() {
     GetCursorPos(&p);
     Geo g = G();
     RECT e = EdgeRect();
-    float cross = S.position == 0 ? (float)(e.bottom - p.y) : S.position == 1 ? (float)(p.x - e.left) : (float)(e.right - p.x);
+    float cross = S.position == 0 ? (float)(e.bottom - p.y) : S.position == 3 ? (float)(p.y - e.top)
+                : S.position == 1 ? (float)(p.x - e.left) : (float)(e.right - p.x);
     bool isPin = std::any_of(g_pins.begin(), g_pins.end(), [](const Pin& q) { return q.key == g_dragKey; });
     bool rem = isPin && cross > g.margin + g.shelf + g.base * 0.9f;
     if (rem != g_dragRemove) { g_dragRemove = rem; Refresh(true); }
@@ -2402,7 +2467,7 @@ static void DragPoll() {
         return;
     }
     if (g_resizing) {
-        int d = S.position == 0 ? g_resizeStart.y - p.y : S.position == 1 ? p.x - g_resizeStart.x : g_resizeStart.x - p.x;
+        int d = S.position == 0 ? g_resizeStart.y - p.y : S.position == 3 ? p.y - g_resizeStart.y : S.position == 1 ? p.x - g_resizeStart.x : g_resizeStart.x - p.x;
         int ns = std::clamp(g_resizeStartSize + (int)std::lround(d / g_scale), 24, 128);
         if (ns != S.size) { S.size = ns; Render(); }
         return;
@@ -3079,7 +3144,7 @@ static void CALLBACK OnForegroundEvent(HWINEVENTHOOK, DWORD, HWND, LONG, LONG, D
 // ---------------------------------------------------------------- settings window
 // All visuals come from DesignTokens.h; no colors or sizes are hard-coded here.
 // Every control calls the same DockCommand commands as the context menu, so both always behave the same.
-enum WType { W_HEADING, W_TOGGLE, W_SLIDER, W_SEGMENT, W_BUTTON };
+enum WType { W_HEADING, W_TOGGLE, W_SLIDER, W_SEGMENT, W_BUTTON, W_PLACEMENT };
 struct Widget {
     WType type = W_HEADING;
     std::wstring label, desc, unit;
@@ -3092,6 +3157,7 @@ struct Widget {
     bool danger = false;
     RectF row, ctl;
     std::vector<RectF> segs;
+    std::vector<int> codes;   // W_PLACEMENT: value each target sets
 };
 HWND g_setWnd = nullptr;
 int g_setPage = 0, g_setHover = -1, g_setHoverSeg = -1, g_setDrag = -1, g_setSideHover = -1;
@@ -3152,9 +3218,80 @@ static Widget& Button(const wchar_t* label, const wchar_t* desc, const wchar_t* 
     w.set = [act](int) { act(); };
     return w;
 }
+// A small picture of the screen with the eight dock placements: the middle of each edge, and
+// each corner with a vertical or horizontal dock. Values are position * 3 + align.
+static Widget& Placement() {
+    Widget& w = AddW(W_PLACEMENT, L"");
+    w.get = [] { return S.position * 3 + S.align; };
+    w.set = [](int code) {
+        S.position = code / 3;
+        S.align = code % 3;
+        g_mx = -1;
+        ApplySettingsChange();
+    };
+    return w;
+}
+static std::wstring PlacementText() {
+    static const wchar_t* edges[4] = {L"Bottom edge", L"Left edge", L"Right edge", L"Top edge"};
+    static const wchar_t* hz[3] = {L"left corner", L"centered", L"right corner"};
+    static const wchar_t* vt[3] = {L"top corner", L"centered", L"bottom corner"};
+    return std::wstring(edges[S.position]) + L", " + (Horizontal() ? hz[S.align] : vt[S.align]);
+}
 static int IndexOf(const int* arr, int n, int v) {
     for (int i = 0; i < n; i++) if (arr[i] == v) return i;
     return -1;
+}
+
+// ---------------------------------------------------------------- updates
+static bool g_updPrompted = false;
+static void SettingsRebuild() {
+    if (g_setWnd) PostMessageW(g_setWnd, WM_APP + 1, 0, 0);
+}
+static void StartUpdate() {
+    update::Install(g_hwnd, WM_UPDATE, g_exePath);
+    SettingsRebuild();
+}
+static void CheckForUpdates() {
+    update::Check(g_hwnd, WM_UPDATE, false);
+    SettingsRebuild();
+}
+// kind: 0 check asked for by the user, 1 quiet startup check, 2 an install that failed
+static void OnUpdateEvent(int kind) {
+    SettingsRebuild();
+    if (kind != 1 || update::state != update::Available || g_updPrompted) return;
+    g_updPrompted = true;
+    std::wstring v;
+    {
+        std::lock_guard<std::mutex> lk(update::mtx);
+        v = update::latest;
+    }
+    std::wstring text = L"Just Better TaskBar " + v + L" is available (you have " JBT_VERSION_WSTR L").\n\n"
+                        L"Install it now? The dock keeps running while it updates.";
+    if (MessageBoxW(nullptr, text.c_str(), L"Just Better TaskBar", MB_YESNO | MB_ICONINFORMATION | MB_TOPMOST | MB_SETFOREGROUND) == IDYES)
+        StartUpdate();
+}
+static void UpdateRows() {
+    int st = update::state;
+    std::wstring v, msg;
+    {
+        std::lock_guard<std::mutex> lk(update::mtx);
+        v = update::latest;
+        msg = update::message;
+    }
+    std::wstring desc, btn;
+    switch (st) {
+    case update::Checking: desc = L"Checking for updates…"; btn = L"Checking…"; break;
+    case update::UpToDate: desc = L"You have the latest version"; btn = L"Check now"; break;
+    case update::Available: desc = L"Version " + v + L" is available"; btn = L"Update"; break;
+    case update::Working: desc = L"Updating… the dock keeps running"; btn = L"Updating…"; break;
+    case update::Failed: desc = L"Didn't work: " + msg; btn = L"Try again"; break;
+    default: desc = L"Not checked yet"; btn = L"Check now"; break;
+    }
+    Toggle(L"Check for updates at startup", L"Looks for a new version on GitHub when the dock starts", [] { return S.updateCheck; }, ID_UPDCHECK);
+    Button(L"Version " JBT_VERSION_WSTR, desc.c_str(), btn.c_str(), [] {
+        if (update::state == update::Available) StartUpdate();
+        else CheckForUpdates();
+    }).enabled = [] { return update::state != update::Checking && update::state != update::Working; };
 }
 
 static void BuildSettingsPage() {
@@ -3170,8 +3307,7 @@ static void BuildSettingsPage() {
         Slider(L"Magnification", L"Zoom on hover", 0, 150, L" %",
                [] { return S.magnify; }, [](int v) { S.magnify = v; Render(); }, [](int) { ApplySettingsChange(); });
         Heading(L"Position");
-        Segment(L"Position on screen", L"", {L"Bottom", L"Left", L"Right"},
-                [] { return S.position; }, [](int i) { DockCommand(ID_POS0 + i); });
+        Placement();
         Heading(L"Hiding");
         Toggle(L"Automatically hide and show", L"The dock appears when the pointer reaches the screen edge", [] { return S.autohide; }, ID_AUTOHIDE);
         Segment(L"Show delay", L"", {L"None", L"0.2 s", L"0.5 s", L"1 s"},
@@ -3187,6 +3323,9 @@ static void BuildSettingsPage() {
         Segment(L"Dock glass", L"Liquid and Clear (beta) bend the desktop at the edges. The dock is left out of screenshots while they're on",
                 {L"Frosted", L"Liquid", L"Clear"}, [] { return S.glassStyle; }, [](int i) { DockCommand(ID_GLASSSTYLE0 + i); })
             .enabled = [] { return S.glass; };
+        Toggle(L"Match nearby windows", L"Liquid and Clear glass take their color from the window next to the dock",
+               [] { return S.tintWindows; }, ID_TINTWIN)
+            .enabled = [] { return S.glass && S.glassStyle >= 1; };
         Slider(L"Color vibrancy", L"Colors behind the glass", 100, 250, L" %", [] { return S.glassSaturation; },
                [](int v) { S.glassSaturation = v; ApplyGlassBrush(g_glass); ApplyGlassBrush(g_barGlass); }, [](int) { SaveIni(); })
             .enabled = [] { return S.glass; };
@@ -3255,6 +3394,8 @@ static void BuildSettingsPage() {
         Toggle(L"Keep windows above the dock", L"Maximized windows don't cover the dock", [] { return S.reserve; }, ID_RESERVE)
             .enabled = [] { return !S.autohide; };
         Toggle(L"Start with Windows", L"Starts automatically when you sign in", [] { return IsAutostart(); }, ID_AUTOSTART);
+        Heading(L"Updates");
+        UpdateRows();
         Heading(L"Advanced");
         Button(L"Settings file", L"Opens dock.ini in Notepad", L"Open", [] { DockCommand(ID_EDITINI); });
         Button(L"Reload settings", L"Applies changes made to dock.ini by hand", L"Reload", [] { DockCommand(ID_RELOAD); });
@@ -3357,6 +3498,14 @@ static void PaintSettings(HDC hdc) {
         }
         if (!inCard) { cards.push_back({y, y}); inCard = true; firstInCard[i] = true; }
         float h = (w.desc.empty() ? m.rowHeight : m.rowHeightWithDesc) * s;
+        float scrW = 0, scrH = 0;
+        if (w.type == W_PLACEMENT) {
+            MONITORINFO pm = PrimaryMon();
+            float aspect = (float)(pm.rcMonitor.bottom - pm.rcMonitor.top) / std::max(1L, pm.rcMonitor.right - pm.rcMonitor.left);
+            scrW = std::min(cw - 2 * pad, 420 * s);
+            scrH = scrW * std::clamp(aspect, 0.45f, 0.8f);
+            h = scrH + 2 * pad + t.type.caption * 2.2f * s;
+        }
         w.row = RectF(cx, y, cw, h);
         float cy = y + h / 2, right = cx + cw - pad;
         RectF tb;
@@ -3388,6 +3537,36 @@ static void PaintSettings(HDC hdc) {
             g.MeasureString(w.opts[0].c_str(), -1, &fBody, PointF(0, 0), &tb);
             float bw = std::max(80 * s, tb.Width + 2 * m.spaceL * s), bh = m.buttonHeight * s;
             w.ctl = RectF(right - bw, cy - bh / 2, bw, bh);
+            break;
+        }
+        case W_PLACEMENT: {
+            RectF sc(cx + (cw - scrW) / 2, y + pad, scrW, scrH);
+            w.ctl = sc;
+            w.segs.clear();
+            w.codes.clear();
+            float in = 8 * s, ph = 30 * s, half = 46 * s, mid = 84 * s;
+            float barH = S.showMenubar ? 8 * s : 0;
+            float top = sc.Y + barH + in, bottom = sc.GetBottom() - in - ph;
+            float vmid = (sc.Y + barH + sc.GetBottom()) / 2;
+            auto corner = [&](float x, float yy, int vCode, int hCode) {
+                w.segs.push_back(RectF(x, yy, half, ph));
+                w.codes.push_back(vCode);
+                w.segs.push_back(RectF(x + half, yy, half, ph));
+                w.codes.push_back(hCode);
+            };
+            corner(sc.X + in, top, 1 * 3 + 0, 3 * 3 + 0);                           // top-left
+            corner(sc.GetRight() - in - 2 * half, top, 2 * 3 + 0, 3 * 3 + 2);        // top-right
+            corner(sc.X + in, bottom, 1 * 3 + 2, 0 * 3 + 0);                        // bottom-left
+            corner(sc.GetRight() - in - 2 * half, bottom, 2 * 3 + 2, 0 * 3 + 2);     // bottom-right
+            float cxm = sc.X + sc.Width / 2;
+            w.segs.push_back(RectF(cxm - mid / 2, top, mid, ph));                   // top middle
+            w.codes.push_back(3 * 3 + 1);
+            w.segs.push_back(RectF(cxm - mid / 2, bottom, mid, ph));                // bottom middle
+            w.codes.push_back(0 * 3 + 1);
+            w.segs.push_back(RectF(sc.X + in, vmid - mid / 2, ph, mid));            // left middle
+            w.codes.push_back(1 * 3 + 1);
+            w.segs.push_back(RectF(sc.GetRight() - in - ph, vmid - mid / 2, ph, mid));  // right middle
+            w.codes.push_back(2 * 3 + 1);
             break;
         }
         default: break;
@@ -3494,6 +3673,73 @@ static void PaintSettings(HDC hdc) {
             g.DrawString(w.opts[0].c_str(), -1, &fBody, w.ctl, &center, !en ? &dis : (w.danger ? &dangerB : &txt));
             break;
         }
+        case W_PLACEMENT: {
+            RectF sc = w.ctl;
+            GraphicsPath sp;
+            rounded(sp, sc, m.radiusL * s);
+            SolidBrush scrB(c.background);
+            g.FillPath(&scrB, &sp);
+            g.DrawPath(&cardPen, &sp);
+            if (S.showMenubar) {
+                GraphicsPath bar;
+                rounded(bar, RectF(sc.X + 6 * s, sc.Y + 4 * s, sc.Width - 12 * s, 4 * s), 2 * s);
+                SolidBrush barB(c.track);
+                g.FillPath(&barB, &bar);
+            }
+            int sel = w.get();
+            // a tiny dock: a capsule with three icons, lying down or standing up
+            auto glyph = [&](RectF r, bool vertical, bool onAccent) {
+                float L = 26 * s, T = 9 * s, cxg = r.X + r.Width / 2, cyg = r.Y + r.Height / 2;
+                RectF cap = vertical ? RectF(cxg - T / 2, cyg - L / 2, T, L) : RectF(cxg - L / 2, cyg - T / 2, L, T);
+                Color col = onAccent ? c.onAccent : c.text;
+                GraphicsPath gp;
+                rounded(gp, cap, T / 2);
+                Pen gpen(col, 1.2f * s);
+                g.DrawPath(&gpen, &gp);
+                SolidBrush dot(col);
+                float d = 3.6f * s, step = 6.5f * s;
+                for (int k = -1; k <= 1; k++) {
+                    float px = vertical ? cxg : cxg + k * step, py = vertical ? cyg + k * step : cyg;
+                    g.FillRectangle(&dot, px - d / 2, py - d / 2, d, d);
+                }
+            };
+            auto pill = [&](RectF r, std::initializer_list<int> parts) {
+                GraphicsPath pp;
+                rounded(pp, r, std::min(r.Width, r.Height) / 2);
+                SolidBrush pb(c.surface);
+                g.FillPath(&pb, &pp);
+                g.DrawPath(&cardPen, &pp);
+                Region clip(&pp);
+                g.SetClip(&clip, CombineModeIntersect);
+                for (int k : parts) {
+                    bool isSel = w.codes[k] == sel, isHov = (int)i == g_setHover && k == g_setHoverSeg;
+                    if (isSel || isHov) {
+                        SolidBrush hb(isSel ? c.accent : c.surfaceHover);
+                        g.FillRectangle(&hb, w.segs[k]);
+                    }
+                }
+                g.SetClip(RectF(sw, 0, W - sw, (REAL)H + g_setScroll), CombineModeReplace);
+                if (parts.size() == 2) {
+                    int a = *parts.begin();
+                    float xm = w.segs[a].GetRight();
+                    g.DrawLine(&divPen, xm, r.Y + 6 * s, xm, r.GetBottom() - 6 * s);
+                }
+                for (int k : parts) {
+                    int code = w.codes[k];
+                    bool vertical = code / 3 == 1 || code / 3 == 2;
+                    glyph(w.segs[k], vertical, code == sel);
+                }
+            };
+            for (int k = 0; k < 8; k += 2) {
+                RectF r = w.segs[k];
+                r.Width += w.segs[k + 1].Width;
+                pill(r, {k, k + 1});
+            }
+            for (int k = 8; k < 12; k++) pill(w.segs[k], {k});
+            std::wstring cap = PlacementText();
+            g.DrawString(cap.c_str(), -1, &fCap, RectF(w.row.X, sc.GetBottom() + 4 * s, w.row.Width, w.row.GetBottom() - sc.GetBottom() - 4 * s), &center, &muted);
+            break;
+        }
         default: break;
         }
     }
@@ -3512,6 +3758,10 @@ static int SettingsHit(int x, int y, int* seg) {
         if (w.type == W_SEGMENT) {
             for (size_t k = 0; k < w.segs.size(); k++) if (w.segs[k].Contains((REAL)x, cy)) *seg = (int)k;
             return (int)i;
+        }
+        if (w.type == W_PLACEMENT) {
+            for (size_t k = 0; k < w.segs.size(); k++) if (w.segs[k].Contains((REAL)x, cy)) *seg = (int)k;
+            return *seg >= 0 ? (int)i : -1;
         }
         if (w.type == W_TOGGLE) return (int)i;
         RectF big = w.ctl;
@@ -3593,6 +3843,7 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         switch (w.type) {
         case W_TOGGLE: w.set(w.get() ? 0 : 1); break;
         case W_SEGMENT: if (seg >= 0 && seg != w.get()) w.set(seg); break;
+        case W_PLACEMENT: if (seg >= 0 && w.codes[seg] != w.get()) w.set(w.codes[seg]); break;
         case W_BUTTON: w.set(0); break;
         case W_SLIDER:
             g_setDrag = hit;
@@ -3712,6 +3963,16 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         liquid::OnAccessReady();
         return 0;
     }
+    if (m == WM_UPDATE) {
+        OnUpdateEvent((int)w);
+        return 0;
+    }
+    if (m == WM_HANDOVER) {
+        g_handover = true;
+        if (g_setWnd) DestroyWindow(g_setWnd);
+        DestroyWindow(g_hwnd);
+        return 0;
+    }
     switch (m) {
     case WM_TIMER:
         if (w == T_ANIM) Tick();
@@ -3720,6 +3981,13 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         else if (w == T_SIZE) { KillTimer(h, T_SIZE); ApplySettingsChange(); }
         else if (w == T_EDGE) EdgeTick();
         else if (w == T_DRAG) DragPoll();
+        else if (w == T_UPDATE) { KillTimer(h, T_UPDATE); update::Check(g_hwnd, WM_UPDATE, true); }
+        else if (w == T_TAKEOVER) {
+            // Explorer re-shows its (auto-hidden) taskbar for a moment after the old instance leaves
+            static int ticks = 0;
+            if (S.hideTaskbar) SetTaskbarsVisible(false);
+            if (++ticks >= 40) KillTimer(h, T_TAKEOVER);
+        }
         return 0;
     case WM_MOUSEACTIVATE:
         return MA_NOACTIVATE;
@@ -3763,7 +4031,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         POINT p;
         GetCursorPos(&p);
         if (g_resizing) {
-            int d = S.position == 0 ? g_resizeStart.y - p.y : S.position == 1 ? p.x - g_resizeStart.x : g_resizeStart.x - p.x;
+            int d = S.position == 0 ? g_resizeStart.y - p.y : S.position == 3 ? p.y - g_resizeStart.y : S.position == 1 ? p.x - g_resizeStart.x : g_resizeStart.x - p.x;
             int ns = std::clamp(g_resizeStartSize + (int)std::lround(d / g_scale), 24, 128);
             if (ns != S.size) { S.size = ns; Render(); }
             return 0;
@@ -3871,6 +4139,40 @@ static void EnableDarkMenus() {
     if (flush) flush();
 }
 
+// A newer version started with --takeover: the old dock is still on screen, so the new one is
+// shown first and the old one is then asked to quit without restoring the Windows taskbar.
+static BOOL CALLBACK FindOldDock(HWND w, LPARAM l) {
+    wchar_t c[64] = {};
+    GetClassNameW(w, c, 64);
+    if (w != g_hwnd && !wcscmp(c, L"JustBetterTaskBarWnd")) ((std::vector<HWND>*)l)->push_back(w);
+    return TRUE;
+}
+static void TakeOver() {
+    std::vector<HWND> old;
+    EnumWindows(FindOldDock, (LPARAM)&old);
+    for (HWND w : old) {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(w, &pid);
+        HANDLE p = OpenProcess(SYNCHRONIZE, FALSE, pid);
+        PostMessageW(w, WM_HANDOVER, 0, 0);
+        if (p) {
+            // keep handling messages while waiting, so the taskbar watcher can act right away
+            ULONGLONG until = GetTickCount64() + 8000;
+            while (GetTickCount64() < until) {
+                DWORD r = MsgWaitForMultipleObjects(1, &p, FALSE, 50, QS_ALLINPUT);
+                if (r == WAIT_OBJECT_0) break;
+                MSG msg;
+                while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+                    TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+            }
+            CloseHandle(p);
+        }
+    }
+    DeleteFileW((g_exePath + L".old").c_str());
+}
+
 int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, PWSTR cmdLine, int) {
     if (cmdLine && wcsstr(cmdLine, L"--quit")) {
         EnumWindows([](HWND w, LPARAM) -> BOOL {
@@ -3882,8 +4184,9 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, PWSTR cmdLine, int) {
         return 0;
     }
     bool wantSettings = cmdLine && wcsstr(cmdLine, L"--settings");
+    bool takeover = cmdLine && wcsstr(cmdLine, L"--takeover");
     HANDLE mtx = CreateMutexW(nullptr, TRUE, L"Local\\JustBetterTaskBar_SingleInstance");
-    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+    if (GetLastError() == ERROR_ALREADY_EXISTS && !takeover) {
         if (wantSettings)
             EnumWindows([](HWND w, LPARAM) -> BOOL {
                 wchar_t c[64] = {};
@@ -3967,9 +4270,16 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, PWSTR cmdLine, int) {
 
     SHQUERYRBINFO qi{sizeof qi};
     g_trashFull = SUCCEEDED(SHQueryRecycleBinW(nullptr, &qi)) && qi.i64NumItems > 0;
-    ApplyShell();
+    // watches for the Windows taskbar showing itself; set up first so a takeover can't let it flash
     HWINEVENTHOOK hook = SetWinEventHook(EVENT_OBJECT_SHOW, EVENT_OBJECT_SHOW, nullptr, OnWinEvent, 0, 0,
                                          WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+    if (takeover) {
+        Refresh(true);
+        ShowWindow(g_hwnd, SW_SHOWNOACTIVATE);
+        Render();
+        TakeOver();
+    }
+    ApplyShell();
     if (S.autohide) g_show = g_showTarget = 0;
     UpdateEdgeTimer();
     Refresh(true);
@@ -3981,6 +4291,8 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, PWSTR cmdLine, int) {
     TrayEnable(S.showMenubar && S.trayIcons);
     RenderBar();
     SetTimer(g_hwnd, T_POLL, 1000, nullptr);
+    if (S.updateCheck && !takeover) SetTimer(g_hwnd, T_UPDATE, 15000, nullptr);
+    if (takeover) SetTimer(g_hwnd, T_TAKEOVER, 100, nullptr);
     if (wantSettings) OpenSettings();
 
     MSG msg;

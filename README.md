@@ -22,10 +22,13 @@ Single native executable, no runtime, around 12 MB of memory.</p>
 - Running indicators: dot, highlight or blue line
 - Live previews of minimized windows
 - Folder stacks (Downloads by default) and the Recycle Bin
-- Bottom, left or right position, auto-hide with adjustable delay and speed
+- Any screen edge, centered or tucked into a corner, picked on a small map of the screen in Settings
+- Auto-hide with adjustable delay and speed
 - Frosted glass background with adjustable vibrancy, light and dark themes
 - Liquid and Clear glass (beta): refraction and a specular rim at the edges; Clear has no blur and tints itself from what's behind it. While either is on, the dock and the menu bar don't appear in screenshots
+- Optional: liquid and clear glass take their color from the window next to the dock
 - Hide any app from the dock and the menu bar
+- Checks GitHub for updates (optional) and updates itself without the dock going away
 
 **Menu bar**
 - Active app name with its classic menus (File, Edit, View…)
