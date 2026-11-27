@@ -1626,7 +1626,14 @@ void Render() {
         GraphicsPath shelf;
         RoundRectPath(shelf, Rc(left, right, c0, cShelf), g.radius);
         SolidBrush sb(light ? Color(alpha, 246, 246, 248) : Color(alpha, 28, 28, 34));
-        if (!liquidOn) gr.FillPath(&sb, &shelf);
+        if (!liquidOn) {
+            gr.FillPath(&sb, &shelf);
+        } else {
+            // the shader draws the glass, but fully transparent pixels of a layered window let clicks
+            // fall through to whatever is behind; an invisible fill keeps the whole shelf clickable
+            SolidBrush hit(Color(1, 0, 0, 0));
+            gr.FillPath(&hit, &shelf);
+        }
         RectF shelfR = Rc(left, right, c0, cShelf);
         LinearGradientBrush rim(PointF(0, shelfR.Y - 1), PointF(0, shelfR.GetBottom() + 1),
                                 light ? Color(220, 255, 255, 255) : Color(135, 255, 255, 255),
