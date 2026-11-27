@@ -311,10 +311,13 @@ static void RoundRectPath(GraphicsPath& p, RectF r, float rad) {
 }
 static bool Horizontal() { return S.position == 0 || S.position == 3; }
 
+// Icon size the dock shrinks to when there are too many items for the screen edge at the
+// chosen size (like macOS); 0 means the chosen size fits.
+float g_fitSize = 0;
 static Geo G() {
     float s = g_scale;
     Geo g;
-    g.base = S.size * s;
+    g.base = (g_fitSize > 0 && g_fitSize < S.size ? g_fitSize : S.size) * s;
     g.maxZ = g.base * (1.0f + S.magnify / 100.0f);
     g.gap = std::round(6 * s);
     g.padT = 6 * s;
@@ -1113,6 +1116,19 @@ static void StartAnim() {
     SetTimer(g_hwnd, T_ANIM, 10, nullptr);
 }
 
+static float FitSize() {
+    MONITORINFO mi = PrimaryMon();
+    Geo g = G();
+    float s = g_scale;
+    float avail = Horizontal() ? (float)(mi.rcMonitor.right - mi.rcMonitor.left)
+                               : (float)(mi.rcMonitor.bottom - mi.rcMonitor.top - (S.showMenubar ? BarH() : 0));
+    avail -= 2 * (g.margin + g.padX) + 2;
+    int icons = 0, seps = 0;
+    for (auto& it : g_items) (it.kind == K_SEP ? seps : icons)++;
+    if (!icons) return 0;
+    float size = ((avail - seps * g.sepW) / icons - g.gap) / s;
+    return size >= S.size ? 0 : std::max(12.0f, std::floor(size));
+}
 static void Refresh(bool force = false) {
     std::vector<HWND> hw;
     EnumWindows(EnumProc, (LPARAM)&hw);
@@ -1241,6 +1257,17 @@ static void Refresh(bool force = false) {
         items.push_back(t);
     }
     g_items.swap(items);
+    {
+        float fit = FitSize();
+        if (fit != g_fitSize) {
+            // icons are cached at the drawn size, so they are rebuilt for the new one
+            g_fitSize = fit;
+            ClearIcons();
+            AppBarSetPos();
+            Refresh(true);
+            return;
+        }
+    }
 
     ULONGLONG now = GetTickCount64();
     for (auto& it : g_items) {

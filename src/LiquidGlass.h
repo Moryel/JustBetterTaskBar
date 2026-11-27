@@ -56,6 +56,7 @@ struct State {
     int mode = 0;
     bool nearTint = false;
     float inX = 0, inY = -1;   // from the dock's screen edge towards the middle of the screen
+    float bandInX = 0, bandInY = 0;   // the edge the current band was made for
     std::vector<HWND> ownWnds;
     bool light = false;
     HWND notify = nullptr;
@@ -252,10 +253,14 @@ inline void OnAccessReady() {
 }
 
 static void EnsureBand(RECT need) {
-    if (g.band && need.left >= g.bandRc.left && need.top >= g.bandRc.top && need.right <= g.bandRc.right && need.bottom <= g.bandRc.bottom)
+    // a different screen edge starts a fresh band; growing the old one would end up covering the whole screen
+    bool sameEdge = g.bandInX == g.inX && g.bandInY == g.inY;
+    if (g.band && sameEdge && need.left >= g.bandRc.left && need.top >= g.bandRc.top && need.right <= g.bandRc.right && need.bottom <= g.bandRc.bottom)
         return;
     RECT nb = need;
-    if (g.band) UnionRect(&nb, &need, &g.bandRc);
+    if (g.band && sameEdge) UnionRect(&nb, &need, &g.bandRc);
+    g.bandInX = g.inX;
+    g.bandInY = g.inY;
     D3D11_TEXTURE2D_DESC d{};
     d.Width = std::max<LONG>(nb.right - nb.left, 1);
     d.Height = std::max<LONG>(nb.bottom - nb.top, 1);
